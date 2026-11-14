@@ -187,9 +187,10 @@ class SizeProfile:
         return sum(files) if files else None
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        from .fsutil import atomic_write_text
+
         data = {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
-        path.write_text(json.dumps(data), encoding="utf-8")
+        atomic_write_text(path, json.dumps(data))
 
     @staticmethod
     def load(path: Path) -> "SizeProfile | None":

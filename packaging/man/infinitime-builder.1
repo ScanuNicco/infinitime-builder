@@ -1,0 +1,37 @@
+.TH INFINITIME-BUILDER 1 "" "InfiniTime Builder" "User Commands"
+.SH NAME
+infinitime-builder \- choose apps and watch faces for the PineTime and build InfiniTime firmware
+.SH SYNOPSIS
+.B infinitime-builder
+.SH DESCRIPTION
+.B infinitime-builder
+opens a window in which you switch InfiniTime's apps and watch faces on or off, set their order in
+the launcher, add third-party apps and watch faces from GitHub repositories or local folders, and
+build a firmware update (\fIpinetime-mcuboot-app-dfu-*.zip\fR) to install on the watch with a
+companion app such as Gadgetbridge, InfiniLink, Siglo, ITD or Amazfish.
+.PP
+Firmware is compiled in the official InfiniTime build container, with Podman or Docker. The first
+build downloads the InfiniTime source and the build image.
+.PP
+For headless builds and for checking app manifests, see
+.BR infinitime-builder-cli (1).
+.SH ENVIRONMENT
+.TP
+.B GITHUB_TOKEN\fR, \fBGH_TOKEN
+A GitHub token, for private package repositories and a higher API rate limit. It is only sent to
+api.github.com.
+.TP
+.B INFINITIME_BUILDER_HOME
+Directory for settings and caches, instead of the default below.
+.SH FILES
+.TP
+.I ~/.local/share/infinitime-builder/
+Settings (\fIsettings.json\fR), downloaded sources and build trees (follows \fBXDG_DATA_HOME\fR).
+.TP
+.I ~/InfiniTime Builds/
+Built firmware, unless another output folder is chosen.
+.SH SEE ALSO
+.BR infinitime-builder-cli (1),
+.BR podman (1)
+.PP
+https://github.com/ScanuNicco/infinitime-builder

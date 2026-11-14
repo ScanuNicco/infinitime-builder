@@ -12,7 +12,8 @@ without forking or touching code:
   464 KB your selection needs, and each item shows its own cost. Selections that clearly won't fit
   can't be built, and every build is checked exactly against the watch's limits.
 - **Add third-party apps and watch faces** straight from GitHub repositories that contain an
-  [`infinitime-app.json`](MANIFEST.md) manifest, or from a local folder.
+  [`infinitime-app.json`](MANIFEST.md) manifest, or from a local folder
+  ([full repository reference](docs/app-repositories.md)).
 - Press **Build firmware** to get a `pinetime-mcuboot-app-dfu-*.zip` file you can install with
   Gadgetbridge, InfiniLink, Siglo, ITD or Amazfish.
 
@@ -30,7 +31,8 @@ installed. The builder picks the image tag that matches the InfiniTime version y
 
 **Packages:** download the `.deb` or `.rpm` from the
 [releases](https://github.com/ScanuNicco/infinitime-builder/releases) (or from the latest
-[workflow run](https://github.com/ScanuNicco/infinitime-builder/actions)), then
+[workflow run](https://github.com/ScanuNicco/infinitime-builder/actions), where the `.deb` and the
+`.rpm` are separate downloads), then
 
 ```sh
 sudo apt install ./infinitime-builder_*.deb      # Debian 13+, Ubuntu 24.04+
@@ -64,7 +66,8 @@ you build. Firmware builds run without network access.
    games) and [ScanuNicco/infinitime-concept-faces](https://github.com/ScanuNicco/infinitime-concept-faces)
    (two watch faces using the resource pack). You can remove them like any other source. For private repositories (or to avoid GitHub's anonymous rate limit),
    start the builder with a `GITHUB_TOKEN` environment variable, e.g.
-   `GITHUB_TOKEN=$(gh auth token) infinitime-builder`. The token is only sent to GitHub's API.
+   `GITHUB_TOKEN=$(gh auth token) infinitime-builder`. The token is only sent to `api.github.com`, never to other
+   hosts, even when GitHub redirects a download elsewhere.
 4. Watch the **flash meter** at the bottom, then press **Build firmware**. The first build downloads
    InfiniTime and the build image; later builds take about a minute.
 5. Send the DFU zip to your watch, then press *Validate* under Settings > Firmware on the watch.
@@ -159,3 +162,18 @@ screenshot
 python -m venv --system-site-packages .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/pytest
 ```
+
+The GUI tests run offscreen when PySide6 or PyQt6 is installed and are skipped otherwise.
+
+To build the packages locally you need `dpkg-deb` for the .deb and
+[fpm](https://fpm.readthedocs.io) 1.18 plus `rpmbuild` for the .rpm:
+`packaging/build-packages.sh [deb] [rpm]` writes them to `dist/`.
+
+### Releasing
+
+1. Set the new version in `itbuilder/__init__.py` (the only place it is defined).
+2. Add a `## [x.y.z] - YYYY-MM-DD` section at the top of `CHANGELOG.md`. The packages' changelogs
+   and the AppStream release list are generated from it, and CI fails if it doesn't match the
+   version.
+3. Commit, then tag and push: `git tag vx.y.z && git push origin vx.y.z`. CI builds, tests and
+   publishes the .deb, the .rpm and `SHA256SUMS` as a GitHub release.

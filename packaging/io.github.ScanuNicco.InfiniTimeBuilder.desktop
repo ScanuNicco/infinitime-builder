@@ -6,6 +6,6 @@ Comment=Choose apps and watch faces for your PineTime and build InfiniTime firmw
 Exec=infinitime-builder
 Icon=io.github.ScanuNicco.InfiniTimeBuilder
 Terminal=false
-Categories=Utility;Development;
+Categories=Utility;
 Keywords=PineTime;InfiniTime;smartwatch;firmware;watch face;
 StartupWMClass=infinitime-builder

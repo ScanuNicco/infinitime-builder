@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import os
 import platform
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import firmware as fw
 from .builder import DEFAULT_FIRMWARE_URL, BuildRequest
+from .fsutil import atomic_write_text
 from .manifest import ExternalItem, ManifestError, Package
 from .sources import FetchError, SourceSpec, SourceStore
 
@@ -60,6 +62,8 @@ class Settings:
     watchfaces: list[str] | None = None
     output_dir: str = str(default_output_dir())
     engine: str = ""
+    # Set by load_settings() when the saved settings could not be read; not saved.
+    load_warning: str = field(default="", compare=False, repr=False)
 
     def to_json(self, include_local: bool = True) -> dict:
         return {
@@ -75,18 +79,31 @@ class Settings:
 
     @staticmethod
     def from_json(d: dict, base: "Settings | None" = None) -> "Settings":
-        s = Settings() if base is None else Settings(**{**base.__dict__})
+        """Settings from saved JSON or a profile. Raises ValueError if the data is malformed."""
+        if not isinstance(d, dict):
+            raise ValueError("settings must be a JSON object")
+        s = Settings() if base is None else Settings(**{**base.__dict__, "load_warning": ""})
         fwd = d.get("firmware", {})
-        s.firmware_url = fwd.get("url", s.firmware_url)
-        s.firmware_ref = fwd.get("ref", s.firmware_ref)
+        if not isinstance(fwd, dict):
+            raise ValueError("'firmware' must be an object")
+        s.firmware_url = _str(fwd.get("url", s.firmware_url), "firmware.url")
+        s.firmware_ref = _str(fwd.get("ref", s.firmware_ref), "firmware.ref")
         if "sources" in d:
-            s.sources = [SourceSpec.from_json(x) for x in d["sources"]]
-        s.apps = d.get("apps", s.apps)
-        s.watchfaces = d.get("watchfaces", s.watchfaces)
-        s.output_dir = d.get("output_dir", s.output_dir)
-        s.engine = d.get("engine", s.engine)
+            if not isinstance(d["sources"], list):
+                raise ValueError("'sources' must be a list")
+            s.sources = []
+            for i, x in enumerate(d["sources"]):
+                if not isinstance(x, dict) or x.get("kind") not in ("github", "local"):
+                    raise ValueError(f"sources[{i}] must be an object with kind 'github' or 'local'")
+                _str(x.get("location"), f"sources[{i}].location")
+                _str(x.get("ref", ""), f"sources[{i}].ref")
+                s.sources.append(SourceSpec.from_json(x))
+        s.apps = _key_list(d.get("apps", s.apps), "apps")
+        s.watchfaces = _key_list(d.get("watchfaces", s.watchfaces), "watchfaces")
+        s.output_dir = _str(d.get("output_dir", s.output_dir), "output_dir")
+        s.engine = _str(d.get("engine", s.engine), "engine")
         if "seen_defaults" in d:
-            s.seen_defaults = list(d["seen_defaults"])
+            s.seen_defaults = list(_key_list(d["seen_defaults"], "seen_defaults") or [])
         elif base is None:
             s.seen_defaults = []  # saved before default sources existed: none offered yet
         return s
@@ -104,27 +121,52 @@ class Settings:
         return changed
 
 
+def _str(value, what: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"'{what}' must be a string")
+    return value
+
+
+def _key_list(value, what: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError(f"'{what}' must be a list of strings")
+    return list(value)
+
+
 def settings_path() -> Path:
     return data_dir() / "settings.json"
 
 
 def load_settings() -> Settings:
+    """The saved settings, or defaults if there are none.
+
+    If the file can't be read, it is kept (renamed to settings.json.broken-<time>) rather than
+    silently overwritten, and the returned settings carry a `load_warning` to show the user.
+    """
     p = settings_path()
-    if p.is_file():
+    if not p.is_file():
+        return Settings()
+    try:
+        s = Settings.from_json(json.loads(p.read_text(encoding="utf-8")))
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        backup = p.with_name(f"{p.name}.broken-{time.strftime('%Y%m%d-%H%M%S')}")
         try:
-            s = Settings.from_json(json.loads(p.read_text(encoding="utf-8")))
-        except (ValueError, KeyError, TypeError):
-            return Settings()
-        if s.offer_default_sources():
-            save_settings(s)
+            p.replace(backup)
+            kept = f"The unreadable file was kept as {backup}."
+        except OSError:
+            kept = ""
+        s = Settings()
+        s.load_warning = f"Your saved settings could not be read ({e}), so the defaults are used. {kept}".strip()
         return s
-    return Settings()
+    if s.offer_default_sources():
+        save_settings(s)
+    return s
 
 
 def save_settings(s: Settings) -> None:
-    p = settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(s.to_json(), indent=2), encoding="utf-8")
+    atomic_write_text(settings_path(), json.dumps(s.to_json(), indent=2))
 
 
 @dataclass

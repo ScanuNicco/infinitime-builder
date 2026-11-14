@@ -1,47 +1,133 @@
 name: Packages
 
-# On every push: test, build .deb and .rpm packages, and check they install and start on
-# Ubuntu 24.04 (PyQt6), Debian 13 (PySide6) and Fedora. Packages are attached to the workflow run;
-# pushing a tag like v0.2.0 also publishes them as a GitHub release.
+# On every push and pull request: lint, test (Python 3.10-3.13, GUI included), check the desktop
+# and AppStream metadata, build a .deb (dpkg-deb, checked with lintian) and an .rpm (fpm), and
+# check they install, start and uninstall cleanly on Ubuntu 24.04 (PyQt6), Debian 13 (PySide6) and
+# Fedora (PySide6).
+#
+# Each package is uploaded to the workflow run as its own artifact, as the plain .deb / .rpm file
+# (not zipped together). Pushing a tag like v0.2.0 also publishes both packages, plus SHA256SUMS,
+# as a GitHub release; the tag must match itbuilder.__version__ and the newest CHANGELOG.md entry.
 
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write  # only used by the release job, for tags
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  FPM_VERSION: "1.18.0"
 
 jobs:
   test:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
+    name: Test (Python ${{ matrix.python }})
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
-      - run: pip install pytest pyflakes
+          python-version: ${{ matrix.python }}
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -qq
+          # Libraries Qt's offscreen platform needs for the GUI tests
+          sudo apt-get install -y -qq libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+          pip install pytest pyflakes PySide6
       - name: Lint
-        run: python -m pyflakes $(ls itbuilder/*.py | grep -v /qt.py)  # qt.py re-exports Qt on purpose
-      - name: Unit tests
-        run: python -m pytest -q tests
+        run: python -m pyflakes $(ls itbuilder/*.py | grep -v /qt.py) packaging/changelog.py tests/*.py  # qt.py re-exports Qt on purpose
+      - name: Unit and GUI tests
+        env:
+          ITB_REQUIRE_QT: "1"
+        run: python -m pytest -q -rs tests
+      - name: The package installs from source
+        run: |
+          pip install .
+          infinitime-builder-cli --version
+          infinitime-builder-cli validate examples/hello-app
 
-  packages:
-    needs: test
+  metadata:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq appstream desktop-file-utils
+      - name: Desktop entry
+        run: desktop-file-validate packaging/*.desktop
+      - name: AppStream metadata
+        run: |
+          python3 packaging/changelog.py metainfo packaging/io.github.ScanuNicco.InfiniTimeBuilder.metainfo.xml.in \
+            > "$RUNNER_TEMP/io.github.ScanuNicco.InfiniTimeBuilder.metainfo.xml"
+          appstreamcli validate --no-net --explain "$RUNNER_TEMP/io.github.ScanuNicco.InfiniTimeBuilder.metainfo.xml"
+      - name: Versions agree
+        run: |
+          version=$(python3 -c "import ast; t = ast.parse(open('itbuilder/__init__.py').read()); print(next(n.value.value for n in t.body if isinstance(n, ast.Assign) and n.targets[0].id == '__version__'))")
+          changelog=$(python3 packaging/changelog.py version)
+          echo "itbuilder.__version__=$version, CHANGELOG.md=$changelog"
+          [ "$version" = "$changelog" ] || { echo "::error::CHANGELOG.md's newest release ($changelog) is not $version"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version"
+            exit 1
+          fi
+
+  packages:
+    needs: [test, metadata]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        format: [deb, rpm]
+    name: Build .${{ matrix.format }}
+    steps:
+      - uses: actions/checkout@v7
       - name: Install fpm
+        if: matrix.format == 'rpm'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ruby ruby-dev rpm build-essential
-          sudo gem install --no-document fpm
-      - name: Build .deb and .rpm
-        run: ITERATION=${{ github.run_number }} packaging/build-packages.sh
+          sudo apt-get install -y -qq ruby ruby-dev build-essential rpm
+          sudo gem install --no-document fpm -v "$FPM_VERSION"
+      - name: Build the .${{ matrix.format }}
+        id: build
+        env:
+          # Releases are package release 1; development builds sort below it (0.<run number>).
+          ITERATION: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || format('0.{0}', github.run_number) }}
+        run: |
+          packaging/build-packages.sh ${{ matrix.format }}
+          files=(dist/*.${{ matrix.format }})
+          if [ ${#files[@]} -ne 1 ] || [ ! -f "${files[0]}" ]; then
+            echo "::error::expected exactly one .${{ matrix.format }} in dist/, found: ${files[*]}"
+            exit 1
+          fi
+          echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+      - name: Show package metadata
+        run: |
+          case ${{ matrix.format }} in
+            deb) dpkg-deb --info "${{ steps.build.outputs.file }}" && dpkg-deb --contents "${{ steps.build.outputs.file }}" ;;
+            rpm) rpm -qip "${{ steps.build.outputs.file }}" && rpm -qRp "${{ steps.build.outputs.file }}" \
+                   && rpm -qp --scripts "${{ steps.build.outputs.file }}" && rpm -qlp "${{ steps.build.outputs.file }}" ;;
+          esac
+      - name: Lintian
+        if: matrix.format == 'deb'
+        # In Debian 13's lintian (the runner's is older); it's clean at --pedantic, keep it that way.
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" debian:13 sh -c \
+            'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lintian > /dev/null &&
+             lintian --fail-on error,warning --display-level ">=info" --pedantic /dist/*.deb'
+      # archive: false uploads the package itself rather than a zip; the artifact is named after
+      # the file (e.g. infinitime-builder_0.1.0-1_all.deb).
       - uses: actions/upload-artifact@v7
         with:
-          name: packages
-          path: dist/*
+          path: ${{ steps.build.outputs.file }}
+          archive: false
           if-no-files-found: error
 
   install-test:
@@ -53,35 +139,59 @@ jobs:
         include:
           - name: Ubuntu 24.04 (PyQt6)
             image: ubuntu:24.04
+            format: deb
             install: apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/*.deb
+            remove: DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq infinitime-builder
           - name: Debian 13 (PySide6)
             image: debian:13
+            format: deb
             install: apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/*.deb
+            remove: DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq infinitime-builder
           - name: Fedora (PySide6)
             image: fedora:latest
+            format: rpm
             install: dnf install -y -q ./dist/*.rpm
+            remove: dnf remove -y -q infinitime-builder
     name: Install on ${{ matrix.name }}
     container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: packages
+          pattern: "*.${{ matrix.format }}"
+          merge-multiple: true
           path: dist
       - name: Install the package
         run: ${{ matrix.install }}
       - name: Smoke test
         run: sh packaging/smoke-test.sh
+      - name: Uninstall leaves nothing behind
+        run: |
+          ${{ matrix.remove }}
+          if [ -e /usr/share/infinitime-builder ]; then find /usr/share/infinitime-builder; exit 1; fi
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: install-test
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: packages
+          pattern: "infinitime-builder*"
+          merge-multiple: true
           path: dist
+      - name: Checksums
+        working-directory: dist
+        run: |
+          ls *.deb *.rpm
+          sha256sum *.deb *.rpm > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
-          files: dist/*
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

@@ -20,6 +20,7 @@ RESOURCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 IMAGE_COLOR_FORMATS = {"CF_TRUE_COLOR_ALPHA", "CF_INDEXED_1_BIT"}
 CODEPOINT_RE = re.compile(r"^0x[0-9a-fA-F]{2,6}$")
 VERSION_RE = re.compile(r"^\d+(\.\d+){0,2}$")
+HOMEPAGE_RE = re.compile(r"^https?://[^\s/]+\.[^\s]*$")
 
 
 class ManifestError(ValueError):
@@ -209,6 +210,9 @@ def parse_manifest(data: dict, source_id: str, root: Path) -> Package:
         raise ManifestError("manifest must contain an 'apps' list")
     if not isinstance(raw_items, list) or not raw_items:
         raise ManifestError("'apps' must be a non-empty list")
+    homepage = data.get("homepage")
+    if homepage is not None and (not isinstance(homepage, str) or not HOMEPAGE_RE.match(homepage)):
+        raise ManifestError("homepage must be an http:// or https:// URL")
     min_it = data.get("minInfiniTime")
     if min_it is not None and (not isinstance(min_it, str) or not VERSION_RE.match(min_it)):
         raise ManifestError("minInfiniTime must look like \"1.15.0\"")
@@ -219,7 +223,7 @@ def parse_manifest(data: dict, source_id: str, root: Path) -> Package:
         author=str(data.get("author", "")),
         description=str(data.get("description", "")),
         min_infinitime=min_it,
-        homepage=data.get("homepage"),
+        homepage=homepage,
         items=[],
     )
     seen = set()

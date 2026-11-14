@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for software centres (GNOME Software, KDE Discover).
+     @RELEASES@ is filled in from CHANGELOG.md by packaging/changelog.py. -->
+<component type="desktop-application">
+  <id>io.github.ScanuNicco.InfiniTimeBuilder</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>InfiniTime Builder</name>
+  <summary>Choose apps and watch faces for your PineTime and build its firmware</summary>
+  <developer id="io.github.scanunicco">
+    <name>InfiniTime Builder</name>
+  </developer>
+  <description>
+    <p>
+      Build your own InfiniTime firmware for the PineTime smartwatch without forking or touching code.
+    </p>
+    <ul>
+      <li>Switch apps and watch faces on or off and drag them into the order you want, with a live preview of the watch</li>
+      <li>See whether your selection fits in the watch's flash before building</li>
+      <li>Add third-party apps and watch faces from GitHub repositories or local folders</li>
+      <li>Get a firmware update file to install with Gadgetbridge, InfiniLink, Siglo, ITD or Amazfish</li>
+    </ul>
+    <p>
+      Firmware is compiled in the official InfiniTime build container, using Podman or Docker.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ScanuNicco.InfiniTimeBuilder.desktop</launchable>
+  <icon type="stock">io.github.ScanuNicco.InfiniTimeBuilder</icon>
+  <url type="homepage">https://github.com/ScanuNicco/infinitime-builder</url>
+  <url type="bugtracker">https://github.com/ScanuNicco/infinitime-builder/issues</url>
+  <url type="vcs-browser">https://github.com/ScanuNicco/infinitime-builder</url>
+  <update_contact>scanuproductions@gmail.com</update_contact>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Choosing apps and watch faces, then building</caption>
+      <image>https://raw.githubusercontent.com/ScanuNicco/infinitime-builder/main/docs/demo.gif</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>PineTime</keyword>
+    <keyword>InfiniTime</keyword>
+    <keyword>smartwatch</keyword>
+    <keyword>firmware</keyword>
+  </keywords>
+  <provides>
+    <binary>infinitime-builder</binary>
+    <binary>infinitime-builder-cli</binary>
+  </provides>
+  <requires>
+    <internet>first-run</internet>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  @RELEASES@
+</component>

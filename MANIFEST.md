@@ -7,6 +7,9 @@ topic to the repository so people can find it from the builder.
 
 See [`examples/hello-app`](examples/hello-app) and [`examples/bigclock-face`](examples/bigclock-face).
 
+This page is a quick start. The full reference, with every field, every validation rule and what
+happens to your repository during a build, is [docs/app-repositories.md](docs/app-repositories.md).
+
 ## `infinitime-app.json`
 
 ```json

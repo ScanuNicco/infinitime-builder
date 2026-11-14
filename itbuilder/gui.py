@@ -12,9 +12,11 @@ from .qt import (  # noqa: F401  (PySide6 or PyQt6)
     QAbstractItemView, QAction, QApplication, QColor, QComboBox, QDesktopServices, QDialog, QDialogButtonBox, QFileDialog, QFont, QFontDatabase, QFormLayout, QFrame, QHBoxLayout, QIcon, QKeySequence, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QObject, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPlainTextEdit, QPointF, QPushButton, QRectF, QRunnable, QScrollArea, QSize, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyleOptionViewItem, QStyledItemDelegate, QThreadPool, QTimer, QToolButton, QUrl, QVBoxLayout, QWidget, Qt, Signal, Slot,
 )
 
+from . import __version__
 from . import builder as bld
 from . import firmware as fw
 from . import sizes
+from .fsutil import atomic_write_text
 from .manifest import ManifestError
 from .project import Entry, Project, Settings, data_dir, load_settings, resolve_ref, save_settings
 from .sources import FetchError, SourceSpec, SourceStore, discover
@@ -839,6 +841,9 @@ class MainWindow(QMainWindow):
         self.show_page(0)
         self.set_busy(True, "Getting ready…")
         self.load_firmware()
+        if self.settings.load_warning:
+            # After the window is shown, so the message has a parent on screen.
+            QTimer.singleShot(0, lambda: QMessageBox.warning(self, "InfiniTime Builder", self.settings.load_warning))
 
     # ---- construction helpers
     def _apply_style(self):
@@ -884,14 +889,29 @@ class MainWindow(QMainWindow):
         h.addAction(a)
         a = QAction("Writing your own app", self)
         a.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(
-            "https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/code/Apps.md")))
+            "https://github.com/ScanuNicco/infinitime-builder/blob/main/docs/app-repositories.md")))
         h.addAction(a)
+        h.addSeparator()
+        a = QAction("About InfiniTime Builder", self)
+        a.triggered.connect(self.show_about)
+        h.addAction(a)
+
+    def show_about(self):
+        from .qt import BINDING
+
+        QMessageBox.about(self, "About InfiniTime Builder", (
+            f"<b>InfiniTime Builder {__version__}</b><br>"
+            "Choose apps and watch faces for your PineTime and build InfiniTime firmware.<br><br>"
+            f"Qt binding: {BINDING}<br>"
+            "Licence: GPL-3.0-or-later<br>"
+            "<a href='https://github.com/ScanuNicco/infinitime-builder'>github.com/ScanuNicco/infinitime-builder</a>"))
 
     def _sources_page(self) -> QWidget:
         w = QWidget()
         self.src_list = QListWidget()
         self.src_list.setAlternatingRowColors(False)
         self.src_list.setSpacing(4)
+        self.src_list.itemDoubleClicked.connect(self.open_source_homepage)
         self.src_input = QLineEdit()
         self.src_input.setPlaceholderText("GitHub repository — owner/repo or https://github.com/owner/repo")
         self.src_input.returnPressed.connect(self.add_source)
@@ -975,7 +995,14 @@ class MainWindow(QMainWindow):
     def save(self):
         self.project.set_selected("app", self.apps.selected())
         self.project.set_selected("watchface", self.faces.selected())
-        save_settings(self.settings)
+        self.persist()
+
+    def persist(self):
+        """Save the settings; a failure (e.g. disk full) is shown rather than raised."""
+        try:
+            save_settings(self.settings)
+        except OSError as e:
+            self.status.setText(f"<span style='color:{BAD.name()}'>Could not save settings: {e}</span>")
 
     def on_changed(self):
         self.save()
@@ -1051,6 +1078,9 @@ class MainWindow(QMainWindow):
                 text = f"{label}\nerror: {self.project.package_errors.get(spec.id, 'not loaded')}"
             it = QListWidgetItem(text)
             it.setData(KEY_ROLE, spec.id)
+            home = self.source_homepage(spec)
+            if home:
+                it.setToolTip(f"{home}\nDouble-click to open")
             if not pkg:
                 it.setForeground(BAD)
             self.src_list.addItem(it)
@@ -1200,7 +1230,7 @@ class MainWindow(QMainWindow):
         def done(pkg):
             self.save()
             self.settings.sources.append(spec)
-            save_settings(self.settings)
+            self.persist()
             self.populate()
             names = ", ".join(i.name for i in pkg.items)
             self.status.setText(f"Added {pkg.name}: {names}. Switch them on in Apps / Watch faces.")
@@ -1210,6 +1240,20 @@ class MainWindow(QMainWindow):
 
         self.run(lambda log, c: self.project.load_source(spec), done,
                  lambda m: self.show_error(f"Could not add {spec.location}:\n{m}"), f"Fetching {spec.location}…")
+
+    def source_homepage(self, spec: SourceSpec) -> str | None:
+        """The manifest's homepage, else the GitHub page of a GitHub source."""
+        pkg = self.project.packages.get(spec.id)
+        if pkg and pkg.homepage:
+            return pkg.homepage
+        return f"https://github.com/{spec.location}" if spec.kind == "github" else None
+
+    def open_source_homepage(self, item: QListWidgetItem):
+        sid = item.data(KEY_ROLE)
+        spec = next((s for s in self.settings.sources if s.id == sid), None)
+        url = self.source_homepage(spec) if spec else None
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def add_source(self):
         text = self.src_input.text().strip()
@@ -1243,7 +1287,7 @@ class MainWindow(QMainWindow):
         prefix = f"ext:{sid}#"
         for kind in ("app", "watchface"):
             self.project.set_selected(kind, [k for k in self.project.selected(kind) if not k.startswith(prefix)])
-        save_settings(self.settings)
+        self.persist()
         self.populate()
         self.load_size_profile()
 
@@ -1271,26 +1315,30 @@ class MainWindow(QMainWindow):
             self.save()
             self.settings.firmware_url = dlg.url.text().strip() or bld.DEFAULT_FIRMWARE_URL
             self.settings.firmware_ref = dlg.ref.currentText().strip()
-            save_settings(self.settings)
+            self.persist()
             self.size_profile, self.size_state = None, "none"
             self.load_firmware(refresh=self.settings.firmware_ref in ("main", "develop"))
 
     def reset_minimal(self):
         self.settings.apps = None
         self.settings.watchfaces = None
-        save_settings(self.settings)
+        self.persist()
         self.populate()
 
     def reset_infinitime(self):
         self.project.use_infinitime_defaults()
-        save_settings(self.settings)
+        self.persist()
         self.populate()
 
     def export_profile(self):
         self.save()
         fn, _ = QFileDialog.getSaveFileName(self, "Export profile", "my-infinitime.json", "Profile (*.json)")
         if fn:
-            Path(fn).write_text(json.dumps(self.settings.to_json(include_local=False), indent=2), encoding="utf-8")
+            try:
+                atomic_write_text(Path(fn), json.dumps(self.settings.to_json(include_local=False), indent=2))
+            except OSError as e:
+                self.show_error(f"Could not save the profile: {e}")
+                return
             self.status.setText(f"Profile saved to {fn}. Share it so others can build the same firmware.")
 
     def import_profile(self):
@@ -1299,7 +1347,7 @@ class MainWindow(QMainWindow):
             return
         try:
             data = json.loads(Path(fn).read_text(encoding="utf-8"))
-            if data.get("format") != "infinitime-builder-profile":
+            if not isinstance(data, dict) or data.get("format") != "infinitime-builder-profile":
                 raise ValueError("not an InfiniTime Builder profile")
             local = [s for s in self.settings.sources if s.kind == "local"]
             new = Settings.from_json(data, base=self.settings)
@@ -1308,14 +1356,14 @@ class MainWindow(QMainWindow):
             self.show_error(f"Could not import profile: {e}")
             return
         self.settings.__dict__.update(new.__dict__)
-        save_settings(self.settings)
+        self.persist()
         self.load_firmware()
 
     def change_output(self):
         d = QFileDialog.getExistingDirectory(self, "Where to save built firmware", self.settings.output_dir)
         if d:
             self.settings.output_dir = d
-            save_settings(self.settings)
+            self.persist()
 
     # ---- build
     def start_build(self):
@@ -1421,6 +1469,7 @@ SIZE_HELP = (
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("InfiniTime Builder")
+    app.setApplicationVersion(__version__)
     app.setDesktopFileName(APP_ID)  # lets the desktop match the window to its .desktop entry and icon
     app.setWindowIcon(QIcon.fromTheme(APP_ID, QIcon(str(Path(__file__).with_name("icon.svg")))))
     app.setStyle("Fusion")

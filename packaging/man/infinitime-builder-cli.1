@@ -1,0 +1,65 @@
+.TH INFINITIME-BUILDER-CLI 1 "" "InfiniTime Builder" "User Commands"
+.SH NAME
+infinitime-builder-cli \- build customised InfiniTime firmware from the command line
+.SH SYNOPSIS
+.B infinitime-builder-cli
+.RB [ \-\-version ]
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+The command line interface of
+.BR infinitime-builder (1).
+Without \fB\-\-profile\fR, commands use the selection and sources saved by the graphical
+interface.
+.SH COMMANDS
+.TP
+.B list
+Show the selected apps and watch faces, in launcher order, and the other available ones.
+.TP
+.B build
+Build a firmware update (DFU zip) and, if needed, a resource pack. Refuses selections that are
+clearly too big for the watch's flash unless \fB\-\-force\fR is given.
+.TP
+.B sizes
+Estimate how much flash each app and watch face takes. Runs a one-off measurement build if needed.
+.TP
+.B validate \fR[\fIpath\fR]
+Check a package's \fIinfinitime-app.json\fR (default: the current directory). For app authors.
+.SH OPTIONS
+.TP
+.BI \-\-profile " file"
+Use a profile exported from the graphical interface (\fBlist\fR, \fBbuild\fR, \fBsizes\fR).
+.TP
+.BI \-\-ref " ref"
+InfiniTime branch or tag to build.
+.TP
+.BI \-\-add " source"
+Extra package source: \fIowner/repo\fR, a GitHub URL, \fIgithub:owner/repo\fR or a folder.
+May be given more than once.
+.TP
+.B \-\-force
+(\fBbuild\fR) Build even if the estimate says the firmware will not fit.
+.TP
+.BI \-o " dir\fR, " \-\-output " dir"
+(\fBbuild\fR) Output directory.
+.TP
+.BR \-v ", " \-\-verbose
+(\fBbuild\fR) Show the full compiler output.
+.TP
+.B \-\-remeasure
+(\fBsizes\fR) Ignore the cached measurement.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH EXIT STATUS
+0 on success, 1 on errors, 130 when interrupted.
+.SH ENVIRONMENT
+See
+.BR infinitime-builder (1).
+.SH EXAMPLES
+.EX
+infinitime-builder-cli build \-\-profile my-infinitime.json \-o ~/fw
+infinitime-builder-cli validate ~/src/my-watchface
+.EE
+.SH SEE ALSO
+.BR infinitime-builder (1)

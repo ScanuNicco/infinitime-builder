@@ -7,14 +7,18 @@ import os
 import platform
 import re
 import shutil
+import queue
 import subprocess
+import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from . import firmware as fw
 from . import sizes
+from .fsutil import FileLock, LockBusy
 from .manifest import ExternalItem
 from .sources import FetchError, clone_firmware, firmware_slot, host_git
 
@@ -93,24 +97,58 @@ def find_engine(preferred: str = "") -> Engine:
     raise BuildError("Could not use a container engine:\n" + "\n".join(problems) + hint)
 
 
-def stream(cmd: list[str], log: Log, cancel: Callable[[], bool] | None = None, cwd: Path | None = None) -> tuple[int, list[str]]:
-    """Run a command, forwarding output lines to log. Returns (exit code, all lines)."""
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1
-    )
-    lines = []
-    assert proc.stdout
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        lines.append(line)
-        log(line)
-        if cancel and cancel():
-            proc.terminate()
+def stream(cmd: list[str], log: Log, cancel: Callable[[], bool] | None = None, cwd: Path | None = None,
+           poll: float = 0.25) -> tuple[int, list[str]]:
+    """Run a command, forwarding output lines to log. Returns (exit code, all lines).
+
+    Output is read on a helper thread so that `cancel` is checked every `poll` seconds, even while
+    the command prints nothing (e.g. a long compile step or a stalled download). `log` is always
+    called on the calling thread.
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1
+        )
+    except OSError as e:
+        raise BuildError(f"Could not run {cmd[0]}: {e}") from e
+    lines: list[str] = []
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def reader():
+        assert proc.stdout
+        try:
+            for line in proc.stdout:
+                q.put(line.rstrip("\n"))
+        finally:
+            q.put(None)
+
+    t = threading.Thread(target=reader, name="stream-reader", daemon=True)
+    t.start()
+    try:
+        while True:
             try:
-                proc.wait(10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            raise BuildError("Build cancelled")
+                line = q.get(timeout=poll)
+            except queue.Empty:
+                line = ""
+            else:
+                if line is None:
+                    break
+                lines.append(line)
+                log(line)
+            if cancel and cancel():
+                raise BuildError("Build cancelled")
+    except BaseException:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise
+    finally:
+        t.join(5)
+        if proc.stdout:
+            proc.stdout.close()
     return proc.wait(), lines
 
 
@@ -163,7 +201,7 @@ def _candidate_tags(firmware_url: str, ref: str, log: Log) -> list[str]:
         hub_tags = []
     if m and hub_tags:
         try:
-            q = f"https://api.github.com/repos/{m.group(1)}/commits?path=docker&per_page=1" + (f"&sha={ref}" if ref else "")
+            q = f"https://api.github.com/repos/{m.group(1)}/commits?path=docker&per_page=1" + (f"&sha={urllib.parse.quote(ref, safe='')}" if ref else "")
             date = json.loads(_http(q, timeout=30))[0]["commit"]["committer"]["date"][:10]
             tags += [name for d, name in sorted(hub_tags) if d >= date][:2]
         except (FetchError, ValueError, KeyError, IndexError):
@@ -190,7 +228,9 @@ def select_image(engine: Engine, tree: Path, firmware_url: str, ref: str, log: L
 
     def adopt(image: str) -> bool:
         if _image_build_sh(engine, image) == wanted:
-            subprocess.run([engine.exe, "tag", image, env], check=True, capture_output=True)
+            r = subprocess.run([engine.exe, "tag", image, env], capture_output=True, text=True, errors="replace")
+            if r.returncode != 0:
+                raise BuildError(f"Could not tag the build image {image}: {(r.stderr or r.stdout).strip()}")
             log(f"Using build image {image}")
             return True
         return False
@@ -254,16 +294,28 @@ class BuildResult:
 
 def ensure_firmware(cache_dir: Path, url: str, ref: str, engine: Engine | None, log: Log, refresh: bool = False) -> Path:
     slot = firmware_slot(cache_dir, url, ref)
-    marker = slot / "src/displayapp/apps/Apps.h.in"
-    if refresh or not marker.is_file() or not (slot / "src/libs/lvgl/lvgl.h").is_file():
-        if shutil.which("git"):
-            runner = lambda a, c: host_git(a, c)  # noqa: E731
-        elif engine:
-            runner = container_git(engine, log)
-        else:
-            raise BuildError("git or docker is needed to download InfiniTime")
-        clone_firmware(url, ref, slot, runner, log)
+    # Waits if another process is downloading the same firmware.
+    with FileLock(slot.with_name(slot.name + ".lock")):
+        marker = slot / "src/displayapp/apps/Apps.h.in"
+        if refresh or not marker.is_file() or not (slot / "src/libs/lvgl/lvgl.h").is_file():
+            if shutil.which("git"):
+                runner = lambda a, c: host_git(a, c)  # noqa: E731
+            elif engine:
+                runner = container_git(engine, log)
+            else:
+                raise BuildError("git or docker is needed to download InfiniTime")
+            clone_firmware(url, ref, slot, runner, log)
     return slot
+
+
+def _tree_lock(tree: Path) -> FileLock:
+    """A lock on a work tree, so two builds (GUI and CLI, or two windows) don't overwrite each other."""
+    return FileLock(tree.with_name(tree.name + ".lock"), blocking=False)
+
+
+def _busy(what: str) -> BuildError:
+    return BuildError(f"Another {what} is already running (in this or another InfiniTime Builder window or "
+                      "the command line). Wait for it to finish and try again.")
 
 
 def _parse_size(lines: list[str]) -> tuple[int | None, int | None, int | None]:
@@ -313,10 +365,19 @@ def build(
         raise BuildError("At least one watch face is required.")
     if not request.apps:
         raise BuildError("At least one app is required.")
+    tree = work_root / "tree"
+    try:
+        with _tree_lock(tree):
+            return _build_locked(request, engine, tree, output_root, log, cancel, output)
+    except LockBusy:
+        raise _busy("firmware build") from None
+
+
+def _build_locked(request: BuildRequest, engine: Engine, tree: Path, output_root: Path, log: Log,
+                  cancel: Callable[[], bool] | None, output: Log) -> BuildResult:
     t0 = time.time()
     image = select_image(engine, request.firmware_dir, request.firmware_url, request.firmware_ref, log, cancel, output)
 
-    tree = work_root / "tree"
     log("Preparing source tree...")
     fw.copy_tree(request.firmware_dir, tree)
     fw.inject(tree, request.external, log)
@@ -350,8 +411,16 @@ def build(
     check_limits(flash_used, flash_size, ram_used, ram_size)  # before anything is saved
 
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    output_root.mkdir(parents=True, exist_ok=True)
     dest = output_root / f"infinitime-{stamp}"
-    dest.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:  # never mix two builds' files in one folder
+        try:
+            dest.mkdir()
+            break
+        except FileExistsError:
+            n += 1
+            dest = output_root / f"infinitime-{stamp}-{n}"
     files = []
     for f in [*dfus, *out.glob("infinitime-resources-*.zip")]:
         shutil.copy2(f, dest / f.name)
@@ -408,6 +477,16 @@ def calibrate(
     firmware_ref: str = "",
 ) -> sizes.SizeProfile:
     """Measure how much flash every app / watch face costs (see sizes.py)."""
+    try:
+        with _tree_lock(work_root / "calibrate"):
+            return _calibrate_locked(firmware_dir, catalog, external, engine, work_root, log, cancel, output,
+                                     firmware_url, firmware_ref)
+    except LockBusy:
+        raise _busy("size measurement") from None
+
+
+def _calibrate_locked(firmware_dir, catalog, external, engine, work_root, log, cancel, output, firmware_url,
+                      firmware_ref) -> sizes.SizeProfile:
     output = output or (lambda line: None)
     image = select_image(engine, firmware_dir, firmware_url, firmware_ref, log, cancel, output)
     failed: list[str] = []

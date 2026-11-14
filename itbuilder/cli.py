@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
 from . import builder as bld
 from . import firmware as fw
 from . import sizes
@@ -17,10 +18,22 @@ from .sources import FetchError, SourceSpec, SourceStore
 TOLERANCE = 0.015  # estimates are slightly pessimistic
 
 
+class CliError(RuntimeError):
+    """A problem with the command line input, reported as 'error: ...'."""
+
+
 def _project(args) -> tuple[Project, bld.Engine | None]:
     settings = load_settings()
+    if settings.load_warning:
+        print("warning:", settings.load_warning, file=sys.stderr)
     if getattr(args, "profile", None):
-        settings = Settings.from_json(json.loads(Path(args.profile).read_text()), base=settings)
+        try:
+            data = json.loads(Path(args.profile).read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("format") != "infinitime-builder-profile":
+                raise ValueError("not an InfiniTime Builder profile")
+            settings = Settings.from_json(data, base=settings)
+        except (OSError, ValueError) as e:
+            raise CliError(f"could not read profile {args.profile}: {e}") from e
     if getattr(args, "ref", None):
         settings.firmware_ref = args.ref
     for src in getattr(args, "add", None) or []:
@@ -133,7 +146,7 @@ def cmd_validate(args) -> int:
     except ManifestError as e:
         print("invalid:", e, file=sys.stderr)
         return 1
-    print(f"OK: {pkg.name} by {pkg.author or 'unknown'}")
+    print(f"OK: {pkg.name} by {pkg.author or 'unknown'}" + (f"  <{pkg.homepage}>" if pkg.homepage else ""))
     for it in pkg.items:
         print(f"  {it.kind:9} {it.qualified:28} header={it.header} sources={', '.join(it.sources) or '-'}"
               + (f" icon={it.icon}" if it.icon else ""))
@@ -146,6 +159,7 @@ def cmd_validate(args) -> int:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="infinitime-builder-cli", description="Build customised InfiniTime firmware.")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
     for name, fn, hlp in (("list", cmd_list, "show available and selected apps"),
                           ("build", cmd_build, "build a DFU file")):
@@ -170,9 +184,12 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     try:
         return args.fn(args)
-    except (bld.BuildError, FetchError, ManifestError, fw.FirmwareError) as e:
+    except (bld.BuildError, FetchError, ManifestError, fw.FirmwareError, CliError, OSError) as e:
         print("error:", e, file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
