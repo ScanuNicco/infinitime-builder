@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infinitime-builder"
+version = "0.1.0"
+description = "Pick, order and add third-party apps and watch faces, then build your own InfiniTime firmware"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+dependencies = ["PySide6>=6.5"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+infinitime-builder-cli = "itbuilder.cli:main"
+
+[project.gui-scripts]
+infinitime-builder = "itbuilder.gui:main"
+
+[tool.setuptools]
+packages = ["itbuilder"]
+
+[tool.setuptools.package-data]
+itbuilder = ["screenshots/*.png", "icon.svg"]

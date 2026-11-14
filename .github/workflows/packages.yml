@@ -1,0 +1,87 @@
+name: Packages
+
+# On every push: test, build .deb and .rpm packages, and check they install and start on
+# Ubuntu 24.04 (PyQt6), Debian 13 (PySide6) and Fedora. Packages are attached to the workflow run;
+# pushing a tag like v0.2.0 also publishes them as a GitHub release.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write  # only used by the release job, for tags
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyflakes
+      - name: Lint
+        run: python -m pyflakes $(ls itbuilder/*.py | grep -v /qt.py)  # qt.py re-exports Qt on purpose
+      - name: Unit tests
+        run: python -m pytest -q tests
+
+  packages:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fpm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ruby ruby-dev rpm build-essential
+          sudo gem install --no-document fpm
+      - name: Build .deb and .rpm
+        run: ITERATION=${{ github.run_number }} packaging/build-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+          if-no-files-found: error
+
+  install-test:
+    needs: packages
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 (PyQt6)
+            image: ubuntu:24.04
+            install: apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/*.deb
+          - name: Debian 13 (PySide6)
+            image: debian:13
+            install: apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/*.deb
+          - name: Fedora (PySide6)
+            image: fedora:latest
+            install: dnf install -y -q ./dist/*.rpm
+    name: Install on ${{ matrix.name }}
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+      - name: Install the package
+        run: ${{ matrix.install }}
+      - name: Smoke test
+        run: sh packaging/smoke-test.sh
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: install-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

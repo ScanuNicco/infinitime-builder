@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "name": "Big Clock",
+  "author": "InfiniTime Builder examples",
+  "description": "An example watch face showing only a large time and the date.",
+  "minInfiniTime": "1.14.0",
+  "apps": [
+    {
+      "type": "watchface",
+      "enum": "BigClock",
+      "name": "Big Clock",
+      "header": "WatchFaceBigClock.h",
+      "sources": ["WatchFaceBigClock.cpp"]
+    }
+  ]
+}

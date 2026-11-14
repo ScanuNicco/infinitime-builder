@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "name": "Hello Counter",
+  "author": "InfiniTime Builder examples",
+  "description": "A minimal example app: tap the screen to count.",
+  "minInfiniTime": "1.14.0",
+  "apps": [
+    {
+      "type": "app",
+      "enum": "HelloCounter",
+      "name": "Hello Counter",
+      "description": "Tap to count, button to exit.",
+      "header": "HelloCounter.h",
+      "sources": ["HelloCounter.cpp"],
+      "icon": "0xf118"
+    }
+  ]
+}
