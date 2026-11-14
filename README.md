@@ -21,9 +21,10 @@ installed. The builder picks the image tag that matches the InfiniTime version y
 
 ## Requirements
 
-- Linux (packages) or any system with Python 3.10+ (from source)
-- Qt 6 for Python: PySide6 or PyQt6 (the packages pull in whichever your distribution has)
-- Docker or Podman, with about 3 GB of disk for the build image
+- Linux: Debian 13+, Ubuntu 24.04+ or Fedora with the packages, or any system with Python 3.10+
+  from source
+- About 3 GB of disk for the build image
+- From source you also need Docker or Podman, and git
 
 ## Install & run
 
@@ -41,9 +42,11 @@ also `infinitime-builder-cli` for headless builds and validating manifests).
 
 **From source:** `pip install .` (or `pipx install .`), which brings PySide6 with it.
 
-The only other thing you need is **Docker** (or Podman). The builder downloads the official
-InfiniTime build image itself on first use (about 1 GB, once), choosing the version that matches the
-firmware you build. If Docker isn't installed or running, the app tells you.
+That's all: the packages bring everything with them, including **Podman** to run the official
+InfiniTime build container (rootless, so there's no daemon to start and no group to join). If you
+already use Docker and it works for your user, the builder uses Docker instead. On first use it
+downloads the build image itself (about 1 GB, once), choosing the version that matches the firmware
+you build. Firmware builds run without network access.
 
 ## Using it
 

@@ -144,7 +144,8 @@ def container_git(engine: Engine, log: Log):
 
 
 def _image_build_sh(engine: Engine, image: str) -> str | None:
-    r = subprocess.run([engine.exe, "run", "--rm", "--entrypoint", "cat", image, "/opt/build.sh"],
+    # --network=none: rootless Podman can't start a networked container without slirp4netns/pasta
+    r = subprocess.run([engine.exe, "run", "--rm", "--network=none", "--entrypoint", "cat", image, "/opt/build.sh"],
                        capture_output=True, text=True, errors="replace")
     return r.stdout if r.returncode == 0 else None
 
@@ -321,7 +322,10 @@ def build(
     fw.inject(tree, request.external, log)
     fw.set_app_lists(tree, request.apps, request.watchfaces)
 
-    cmd = [engine.exe, "run", "--rm", *engine.user_args(), *engine.volume(tree, "/sources"), image]
+    # --network=none: the build image already has everything, so builds never need the network.
+    # That also keeps third-party app code from reaching the network while it is compiled, and
+    # rootless Podman then doesn't need a network helper (slirp4netns / pasta).
+    cmd = [engine.exe, "run", "--rm", "--network=none", *engine.user_args(), *engine.volume(tree, "/sources"), image]
     log("Compiling firmware (this takes a minute or two)...")
     output("$ " + " ".join(cmd))
     code, lines = stream(cmd, output, cancel)
@@ -424,7 +428,7 @@ def calibrate(
         text, n = re.subn(r"^APP_SIZE\s*=.*?;", "APP_SIZE = 0x100000; /* calibration: no limit */", text, flags=re.M)
         if n:
             ld.write_text(text, encoding="utf-8")
-        cmd = [engine.exe, "run", "--rm", *engine.user_args(), *engine.volume(tree, "/sources"),
+        cmd = [engine.exe, "run", "--rm", "--network=none", *engine.user_args(), *engine.volume(tree, "/sources"),
                "-e", "DISABLE_POSTBUILD=true", image, "/opt/build.sh", "pinetime-app"]
         log("Measuring app sizes" + (" (including third-party apps)..." if attempt_external else "..."))
         code, lines = stream(cmd, output, cancel)

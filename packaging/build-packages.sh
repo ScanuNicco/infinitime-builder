@@ -43,14 +43,21 @@ COMMON=(-s dir -C "$STAGE" -n "$NAME" -v "$VERSION" --iteration "$ITERATION" -a 
         --license GPL-3.0-or-later --url "$URL" --description "$DESCRIPTION"
         --maintainer "InfiniTime Builder" --vendor "InfiniTime Builder" --force)
 
+# Everything needed to build firmware right after installing, with no setup:
+# - Podman, because it works rootless out of the box (Docker needs its daemon running and the user
+#   in the docker group). The app still uses Docker instead if Docker is installed and usable.
+#   Ubuntu 24.04's podman package doesn't pull in uidmap (newuidmap), which rootless Podman needs.
+# - git, to download InfiniTime, and ca-certificates for HTTPS (git only recommends it on Debian).
+# - Qt's SVG plugin, for the window icon.
 fpm "${COMMON[@]}" -t deb -p dist/ \
-  -d "python3 (>= 3.10)" -d "python3-pyside6.qtwidgets | python3-pyqt6" \
-  --deb-recommends "docker.io | podman" --deb-recommends git \
+  -d "python3 (>= 3.10)" -d "python3-pyside6.qtwidgets | python3-pyqt6" -d libqt6svg6 \
+  -d podman -d uidmap -d git -d ca-certificates \
+  --deb-suggests docker.io \
   usr
 
 fpm "${COMMON[@]}" -t rpm -p dist/ \
-  -d "python3 >= 3.10" -d "(python3-pyside6 or python3-pyqt6)" \
-  --rpm-tag "Recommends: podman" --rpm-tag "Recommends: git" \
+  -d "python3 >= 3.10" -d "(python3-pyside6 or python3-pyqt6)" -d qt6-qtsvg \
+  -d podman -d git-core -d ca-certificates \
   usr
 
 ls -l dist/
