@@ -118,8 +118,17 @@ jobs:
       - name: Lintian
         if: matrix.format == 'deb'
         # In Debian 13's lintian (the runner's is older); it's clean at --pedantic, keep it that way.
+        # Development builds also lint a release-numbered (-1) build, because lintian checks
+        # some things only for those; that way a tag never finds a problem first.
         run: |
-          docker run --rm -v "$PWD/dist:/dist:ro" debian:13 sh -c \
+          mkdir -p "$RUNNER_TEMP/lint"
+          cp "${{ steps.build.outputs.file }}" "$RUNNER_TEMP/lint/"
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            ITERATION=1 packaging/build-packages.sh deb > /dev/null
+            mv dist/*_*-1_all.deb "$RUNNER_TEMP/lint/"
+          fi
+          ls "$RUNNER_TEMP/lint"
+          docker run --rm -v "$RUNNER_TEMP/lint:/dist:ro" debian:13 sh -c \
             'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lintian > /dev/null &&
              lintian --fail-on error,warning --display-level ">=info" --pedantic /dist/*.deb'
       # archive: false uploads the package itself rather than a zip; the artifact is named after

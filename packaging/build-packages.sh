@@ -102,6 +102,8 @@ for f in "${FORMATS[@]}"; do
         | gzip -9 -n > "$DEB/usr/share/doc/$NAME/changelog.Debian.gz"
       gzip -9 -n < CHANGELOG.md > "$DEB/usr/share/doc/$NAME/changelog.gz"
       chmod 644 "$DEB/usr/share/doc/$NAME/"*.gz
+      # Released outside the Debian archive, so archive-only checks are overridden (see the file).
+      install -D -m 644 packaging/lintian-overrides "$DEB/usr/share/lintian/overrides/$NAME"
       install -d -m 755 "$DEB/DEBIAN"
       cat > "$DEB/DEBIAN/control" <<CONTROL
 Package: $NAME
