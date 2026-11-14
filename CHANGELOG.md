@@ -13,4 +13,6 @@ followed by `- ` bullet points (`###` subheadings are allowed and ignored).
 - Third-party packages from GitHub repositories or local folders, described by
   `infinitime-app.json` (see docs/app-repositories.md).
 - Command line interface for headless builds and manifest validation.
+- Progress bar with percentage and elapsed time for downloads, size measurement and builds; the
+  window stays responsive on slow and single-core computers.
 - .deb and .rpm packages for Debian 13+, Ubuntu 24.04+ and Fedora.

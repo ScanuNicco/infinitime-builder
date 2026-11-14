@@ -97,6 +97,15 @@ def find_engine(preferred: str = "") -> Engine:
     raise BuildError("Could not use a container engine:\n" + "\n".join(problems) + hint)
 
 
+MAKE_PROGRESS_RE = re.compile(r"^\[\s*(\d{1,3})%\]")
+
+
+def make_progress(line: str) -> int | None:
+    """The percentage in a CMake/make progress line such as "[ 42%] Building CXX object ...", else None."""
+    m = MAKE_PROGRESS_RE.match(line)
+    return min(int(m.group(1)), 100) if m else None
+
+
 def stream(cmd: list[str], log: Log, cancel: Callable[[], bool] | None = None, cwd: Path | None = None,
            poll: float = 0.25) -> tuple[int, list[str]]:
     """Run a command, forwarding output lines to log. Returns (exit code, all lines).
@@ -387,7 +396,7 @@ def _build_locked(request: BuildRequest, engine: Engine, tree: Path, output_root
     # That also keeps third-party app code from reaching the network while it is compiled, and
     # rootless Podman then doesn't need a network helper (slirp4netns / pasta).
     cmd = [engine.exe, "run", "--rm", "--network=none", *engine.user_args(), *engine.volume(tree, "/sources"), image]
-    log("Compiling firmware (this takes a minute or two)...")
+    log("Compiling firmware...")
     output("$ " + " ".join(cmd))
     code, lines = stream(cmd, output, cancel)
     if code != 0:

@@ -97,3 +97,111 @@ def test_settings_save_failure_is_shown_not_raised(window, monkeypatch):
     monkeypatch.setattr(gui, "save_settings", fail)
     window.persist()
     assert "disk full" in window.status.text()
+
+
+def test_task_reports_make_progress(app):
+    got = {"log": [], "pct": []}
+
+    def work(log, cancelled):
+        log("[ 10%] Building C object a.o")
+        log("[ 10%] Building C object b.o")  # same percentage: reported once
+        log(gui.PROGRESS_ONLY + "[ 55%] Building C object c.o")  # progress only, not logged
+        return 1
+
+    t = gui.Task(work, lambda r: got.setdefault("done", r), lambda m: got.setdefault("failed", m),
+                 got["log"].append, got["pct"].append)
+    qt.QThreadPool.globalInstance().start(t)
+    assert _wait(app, lambda: "done" in got)
+    assert got["pct"] == [10, 55]
+    assert got["log"] == ["[ 10%] Building C object a.o", "[ 10%] Building C object b.o"]
+
+
+def test_tasks_do_not_queue_behind_each_other_on_a_single_core(window, app):
+    """A long background task (the size measurement) must not hold up the next one (a build)."""
+    import threading
+
+    assert window.pool is not qt.QThreadPool.globalInstance()
+    assert window.pool.maxThreadCount() >= 4  # independent of the number of CPU cores
+    release = threading.Event()
+    blocker = gui.Task(lambda log, c: release.wait(10), lambda r: None, lambda m: None)
+    window.pool.start(blocker)
+    got = {}
+    try:
+        window.run(lambda log, c: 7, lambda r: got.setdefault("done", r))
+        assert _wait(app, lambda: "done" in got), "the second task waited for the first"
+    finally:
+        release.set()
+    assert got["done"] == 7
+
+
+def test_progress_bar_follows_the_operation(window, app):
+    import threading
+
+    release = threading.Event()
+
+    def work(log, cancelled):
+        log(gui.STATUS + "Compiling firmware...")
+        log("[ 37%] Building CXX object x.o")
+        release.wait(10)
+
+    window.run(work, lambda r: None)
+    try:
+        assert window.progress.isVisibleTo(window)
+        assert _wait(app, lambda: window.progress.value() == 37)
+        assert window.progress.maximum() == 100
+        assert "37%" in window.progress_text.text()
+        assert window.status.text() == "Compiling firmware..."
+    finally:
+        release.set()
+    assert _wait(app, lambda: not window.progress.isVisibleTo(window))
+    assert "[ 37%] Building CXX object x.o" in window.log.toPlainText()
+
+
+def test_progress_is_indeterminate_until_a_percentage_is_known(window, app):
+    import threading
+
+    release = threading.Event()
+    window.run(lambda log, c: release.wait(10), lambda r: None)
+    try:
+        assert window.progress.isVisibleTo(window)
+        assert window.progress.maximum() == 0  # Qt's animated "busy" bar
+    finally:
+        release.set()
+    assert _wait(app, lambda: not window.busy)
+
+
+def test_build_pauses_the_size_measurement_and_resumes_it(window, app, monkeypatch):
+    calls = []
+    measuring = gui.Task(lambda log, c: None, lambda r: None, lambda m: None)
+    window.calib_task = measuring
+    window.calib_op = gui.Progress("Measuring")
+    window.engine = object()
+    monkeypatch.setattr(window.project, "build_request", lambda: ("request", [], []))
+
+    def fake_build(req, engine, work, out, log, cancelled, output):
+        calls.append(("build", window.calib_task, window.size_state))
+        raise gui.bld.BuildError("Build cancelled")
+
+    monkeypatch.setattr(gui.bld, "build", fake_build)
+    monkeypatch.setattr(window, "start_calibration", lambda force=False: calls.append(("measure", force)))
+    window.start_build()
+    assert measuring.cancelled
+    assert _wait(app, lambda: len(calls) == 2)
+    assert calls == [("build", None, "paused"), ("measure", True)]
+    assert not window.building
+
+
+def test_measurement_requested_during_a_build_waits_for_it(window):
+    window.project.catalog = object()
+    window.engine = object()
+    window.building = True
+    window.start_calibration(force=True)
+    assert window.calib_task is None and window.calib_resume and window.size_state == "paused"
+
+
+def test_log_lines_are_added_in_batches(window, app):
+    for i in range(500):
+        window.append_log(f"line {i}")
+    assert window.log.toPlainText() == ""  # not yet: one redraw for the lot
+    assert _wait(app, lambda: window.log.blockCount() >= 500)
+    assert window.log.toPlainText().splitlines()[-1] == "line 499"

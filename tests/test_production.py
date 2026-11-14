@@ -317,3 +317,11 @@ def test_changelog_matches_version():
     assert rpm.startswith("* ") and f"- {__version__}-1" in rpm.splitlines()[0]
     assert f'<release version="{__version__}"' in changelog.appstream(releases)
 
+
+
+def test_make_progress_lines():
+    assert bld.make_progress("[ 42%] Building CXX object src/CMakeFiles/x.dir/a.cpp.o") == 42
+    assert bld.make_progress("[100%] Built target pinetime-app") == 100
+    assert bld.make_progress("[  0%] Generating fonts") == 0
+    assert bld.make_progress("Scanning dependencies of target lvgl") is None
+    assert bld.make_progress("warning: [ 42%] in the middle") is None

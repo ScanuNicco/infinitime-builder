@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import time
 import uuid
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .qt import (  # noqa: F401  (PySide6 or PyQt6)
-    QAbstractItemView, QAction, QApplication, QColor, QComboBox, QDesktopServices, QDialog, QDialogButtonBox, QFileDialog, QFont, QFontDatabase, QFormLayout, QFrame, QHBoxLayout, QIcon, QKeySequence, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QObject, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPlainTextEdit, QPointF, QPushButton, QRectF, QRunnable, QScrollArea, QSize, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyleOptionViewItem, QStyledItemDelegate, QThreadPool, QTimer, QToolButton, QUrl, QVBoxLayout, QWidget, Qt, Signal, Slot,
+    QAbstractItemView, QAction, QApplication, QColor, QComboBox, QDesktopServices, QDialog, QDialogButtonBox, QFileDialog, QFont, QFontDatabase, QFormLayout, QFrame, QHBoxLayout, QIcon, QKeySequence, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QObject, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPlainTextEdit, QPointF, QProgressBar, QPushButton, QRectF, QRunnable, QScrollArea, QSize, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyleOptionViewItem, QStyledItemDelegate, QThreadPool, QTimer, QToolButton, QUrl, QVBoxLayout, QWidget, Qt, Signal, Slot,
 )
 
 from . import __version__
@@ -52,8 +54,14 @@ def is_dark(w: QWidget) -> bool:
 # --------------------------------------------------------------------------- background tasks
 
 
+# Task log lines: "\x01..." is a progress message (also shown in the status line); "\x03..." is
+# tool output used only for the progress bar (e.g. the size measurement's compiler output).
+STATUS, PROGRESS_ONLY = "\x01", "\x03"
+
+
 class _Signals(QObject):
     log = Signal(str)
+    progress = Signal(int)
     done = Signal(object)
     failed = Signal(str)
 
@@ -61,9 +69,9 @@ class _Signals(QObject):
 class _Bridge(QObject):
     """Lives in the GUI thread so the callbacks always run there (queued connections)."""
 
-    def __init__(self, on_log, on_done, on_failed):
+    def __init__(self, on_log, on_done, on_failed, on_progress):
         super().__init__()
-        self.cbs = (on_log, on_done, on_failed)
+        self.cbs = (on_log, on_done, on_failed, on_progress)
 
     @Slot(str)
     def log(self, s):
@@ -77,20 +85,30 @@ class _Bridge(QObject):
     def failed(self, m):
         self.cbs[2](m)
 
+    @Slot(int)
+    def progress(self, pct):
+        self.cbs[3](pct)
+
 
 class Task(QRunnable):
-    """Run fn(log, cancelled) in the thread pool; callbacks are invoked in the GUI thread."""
+    """Run fn(log, cancelled) in the thread pool; callbacks are invoked in the GUI thread.
 
-    def __init__(self, fn, on_done, on_failed, on_log=lambda s: None):
+    Lines passed to log that are make progress lines ("[ 42%] ...") also go to on_progress(42);
+    lines starting with PROGRESS_ONLY go only there.
+    """
+
+    def __init__(self, fn, on_done, on_failed, on_log=lambda s: None, on_progress=lambda pct: None):
         super().__init__()
         self.setAutoDelete(False)
         self.fn = fn
         self.signals = _Signals()
-        self.bridge = _Bridge(on_log, on_done, on_failed)
+        self.bridge = _Bridge(on_log, on_done, on_failed, on_progress)
         self.signals.log.connect(self.bridge.log)
         self.signals.done.connect(self.bridge.done)
         self.signals.failed.connect(self.bridge.failed)
+        self.signals.progress.connect(self.bridge.progress)
         self.cancelled = False
+        self._pct = -1
 
     def _emit(self, signal_name: str, value) -> None:
         # The window may have been closed while this task was still running; then there is
@@ -100,9 +118,20 @@ class Task(QRunnable):
         except RuntimeError:
             self.cancelled = True
 
+    def _log(self, line: str) -> None:
+        only_progress = line.startswith(PROGRESS_ONLY)
+        if only_progress:
+            line = line[1:]
+        pct = bld.make_progress(line)
+        if pct is not None and pct != self._pct:
+            self._pct = pct
+            self._emit("progress", pct)
+        if not only_progress:
+            self._emit("log", line)
+
     def run(self):
         try:
-            res = self.fn(lambda line: self._emit("log", line), lambda: self.cancelled)
+            res = self.fn(self._log, lambda: self.cancelled)
         except (bld.BuildError, FetchError, ManifestError, fw.FirmwareError, OSError) as e:
             self._emit("failed", str(e))
         except Exception:  # noqa: BLE001 - surface unexpected errors to the user instead of dying silently
@@ -432,13 +461,12 @@ class FlashMeter(QWidget):
         super().__init__()
         self.used: int | None = None
         self.limit = sizes.DEFAULT_FLASH_LIMIT
-        self.busy = False
         self.setMinimumHeight(14)
         self.setMaximumHeight(14)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-    def set(self, used: int | None, limit: int, busy: bool = False):
-        self.used, self.limit, self.busy = used, limit, busy
+    def set(self, used: int | None, limit: int):
+        self.used, self.limit = used, limit
         self.update()
 
     def colour(self) -> QColor:
@@ -465,9 +493,7 @@ class FlashMeter(QWidget):
                 lx = r.left() + r.width() * self.limit / scale
                 p.setBrush(text)
                 p.drawRect(QRectF(lx - 1, r.top() - 2, 2, r.height() + 4))
-        elif self.busy:
-            p.setBrush(mix(base, text, 0.25))
-            p.drawRoundedRect(QRectF(r.left(), r.top(), r.width() * 0.3, r.height()), r.height() / 2, r.height() / 2)
+        # While measuring, the track stays empty: the progress bar below shows the measurement.
 
 
 # --------------------------------------------------------------------------- picker page
@@ -701,9 +727,30 @@ QMainWindow, #page { background: palette(window); }
 #bottomBar { background: %(bar)s; border-top: 1px solid %(line)s; }
 #meterText { font-weight: 600; }
 #statusText { color: %(muted)s; }
+QProgressBar { border: none; border-radius: 5px; background: %(line)s; }
+QProgressBar::chunk { border-radius: 5px; background: %(accent)s; }
 QLineEdit { padding: 6px 10px; border-radius: 8px; border: 1px solid %(line)s; background: palette(base); }
 #card { background: %(card)s; border-radius: 12px; }
 """
+
+
+@dataclass
+class Progress:
+    """A running operation shown by the progress bar. pct None means 'no percentage known yet'."""
+    label: str = ""
+    pct: int | None = None
+    start: float = field(default_factory=time.monotonic)
+
+
+def fmt_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+# Tasks mostly wait on containers and the network, so they get their own pool instead of Qt's
+# global one, which allows one thread per CPU core: on a single-core computer a build clicked
+# while app sizes were being measured would otherwise wait, greyed out, until that finished.
+POOL_THREADS = 8
 
 
 class MainWindow(QMainWindow):
@@ -711,7 +758,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("InfiniTime Builder")
         self.resize(1180, 780)
-        self.pool = QThreadPool.globalInstance()
+        self.pool = QThreadPool(self)
+        self.pool.setMaxThreadCount(POOL_THREADS)
         self.settings = load_settings()
         self.project = Project(self.settings, SourceStore(data_dir() / "cache"))
         self.engine: bld.Engine | None = None
@@ -719,7 +767,18 @@ class MainWindow(QMainWindow):
         self.task: Task | None = None
         self.calib_task: Task | None = None
         self.size_profile: sizes.SizeProfile | None = None
-        self.size_state = "none"  # none | measuring | ready | failed
+        self.size_state = "none"  # none | measuring | paused | ready | failed
+        self.building = False
+        self.calib_resume = False  # measure again once the current build is over
+        self.op: Progress | None = None  # the foreground operation (self.task)
+        self.calib_op: Progress | None = None  # the size measurement (self.calib_task)
+        self.progress_timer = QTimer(self, interval=1000)  # keeps the elapsed time ticking
+        self.progress_timer.timeout.connect(self.refresh_progress)
+        # Tool output arrives a line at a time; adding it to the log in batches keeps a fast build
+        # from making the window redraw hundreds of times a second.
+        self._log_buf: list[str] = []
+        self.log_timer = QTimer(self, singleShot=True, interval=150)
+        self.log_timer.timeout.connect(self.flush_log)
         self.last_result: bld.BuildResult | None = None
         self.estimate_over = False
         self.calib_timer = QTimer(self, singleShot=True, interval=800)
@@ -797,6 +856,17 @@ class MainWindow(QMainWindow):
                                  "infinitime-resources zip to the watch after the firmware.")
         info.addWidget(self.res_text)
         info.addWidget(self.status)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(10)
+        self.progress_text = QLabel("")
+        self.progress_text.setObjectName("statusText")
+        prow = QHBoxLayout()
+        prow.addWidget(self.progress, 1)
+        prow.addWidget(self.progress_text)
+        info.addLayout(prow)
+        self.progress.hide()
+        self.progress_text.hide()
         self.build_btn = QPushButton("Build firmware")
         self.build_btn.setObjectName("buildButton")
         self.build_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -976,17 +1046,69 @@ class MainWindow(QMainWindow):
         self.build_btn.setText("Building…" if self.busy and self.cancel_btn.isVisible() else "Build firmware")
 
     def run(self, fn, done, failed=None, msg="", cancellable=False):
-        self.task = Task(fn, lambda r: (self.set_busy(False), done(r)),
-                         lambda m: (self.set_busy(False), (failed or self.show_error)(m)), self.append_log)
+        def finish():
+            self.op = None
+            self.flush_log()
+            self.set_busy(False)
+            self.refresh_progress()
+
+        self.task = Task(fn, lambda r: (finish(), done(r)), lambda m: (finish(), (failed or self.show_error)(m)),
+                         self.append_log, self.set_op_progress)
+        self.op = Progress()
         self.set_busy(True, msg, cancellable)
+        self.refresh_progress()
         self.pool.start(self.task)
 
+    def set_op_progress(self, pct: int):
+        if self.op:
+            self.op.pct = pct
+            self.refresh_progress()
+
+    def set_calib_progress(self, pct: int):
+        if self.calib_op:
+            self.calib_op.pct = pct
+            self.refresh_progress()
+
+    def refresh_progress(self):
+        """Show the foreground operation, else the size measurement, else nothing."""
+        op = self.op or self.calib_op
+        self.progress.setVisible(op is not None)
+        self.progress_text.setVisible(op is not None)
+        if op is None:
+            self.progress_timer.stop()
+            return
+        if not self.progress_timer.isActive():
+            self.progress_timer.start()
+        if op.pct is None:
+            self.progress.setRange(0, 0)  # animated "working" bar
+        else:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(op.pct)
+        parts = [op.label, f"{op.pct}%" if op.pct is not None else "", fmt_elapsed(time.monotonic() - op.start)]
+        self.progress_text.setText("  ·  ".join(p for p in parts if p))
+
     def append_log(self, line: str):
-        # progress messages are prefixed with \x01 so they also update the status line
-        if line.startswith("\x01"):
+        # progress messages are prefixed with STATUS so they also update the status line; they
+        # start a new step, whose percentage (if any) is not known yet
+        if line.startswith(STATUS):
             line = line[1:]
             self.status.setText(line)
-        self.log.appendPlainText(line)
+            if self.op:
+                self.op.pct = None
+                self.refresh_progress()
+        self._log_buf.append(line)
+        if not self.log_timer.isActive():
+            self.log_timer.start()
+
+    def flush_log(self):
+        if self._log_buf:
+            text = "\n".join(self._log_buf)
+            self._log_buf.clear()
+            self.log.appendPlainText(text)
+
+    def clear_log(self):
+        self._log_buf.clear()
+        self.log.clear()
 
     def show_error(self, msg: str):
         self.status.setText(f"<span style='color:{BAD.name()}'>" + msg.splitlines()[0] + "</span>")
@@ -1012,9 +1134,7 @@ class MainWindow(QMainWindow):
     # ---- loading
     def load_firmware(self, refresh=False):
         settings = self.settings
-        if self.calib_task:
-            self.calib_task.cancelled = True
-            self.calib_task = None
+        self.stop_calibration()
 
         def work(log, cancelled):
             try:
@@ -1022,7 +1142,7 @@ class MainWindow(QMainWindow):
             except bld.BuildError as e:
                 engine, err = None, str(e)
             ref = resolve_ref(settings)
-            status = lambda m: log("\x01" + m)  # noqa: E731
+            status = lambda m: log(STATUS + m)  # noqa: E731
             path = bld.ensure_firmware(data_dir() / "cache", settings.firmware_url, ref, engine, status, refresh)
             project = Project(settings, self.project.store)
             project.set_firmware(path, ref)
@@ -1041,14 +1161,7 @@ class MainWindow(QMainWindow):
             fork = "" if "InfiniTimeOrg/InfiniTime" in self.settings.firmware_url else "  ·  fork"
             self.fw_chip.setText(f"InfiniTime {cat.version}{fork}  ▾")
             self.fw_chip.setToolTip(f"{self.settings.firmware_url} @ {ref or 'default branch'}\nClick to change")
-            if self.engine:
-                self.engine_chip.setText(f"● {self.engine.name}")
-                self.engine_chip.setStyleSheet(f"color: {ACCENT.name()}")
-                self.engine_chip.setToolTip("Ready to build")
-            else:
-                self.engine_chip.setText("● Docker not available")
-                self.engine_chip.setStyleSheet(f"color: {BAD.name()}")
-                self.engine_chip.setToolTip(self.engine_error)
+            self.show_engine()
             self.populate()
             self.set_busy(False, "Ready. Switch apps on or off, drag to reorder, then build."
                           if self.engine else "Docker is needed to build: " + self.engine_error)
@@ -1059,6 +1172,16 @@ class MainWindow(QMainWindow):
             self.show_error("Could not get the InfiniTime source:\n" + msg)
 
         self.run(work, done, failed, "Downloading InfiniTime source (first run only)…")
+
+    def show_engine(self):
+        if self.engine:
+            self.engine_chip.setText(f"● {self.engine.name}")
+            self.engine_chip.setStyleSheet(f"color: {ACCENT.name()}")
+            self.engine_chip.setToolTip("Ready to build")
+        else:
+            self.engine_chip.setText("● Docker not available")
+            self.engine_chip.setStyleSheet(f"color: {BAD.name()}")
+            self.engine_chip.setToolTip(self.engine_error)
 
     def populate(self):
         self.apps.populate(self.project.entries("app"), self.project.selected("app"))
@@ -1104,6 +1227,13 @@ class MainWindow(QMainWindow):
         self.update_sizes()
         self.calib_timer.start()
 
+    def stop_calibration(self):
+        if self.calib_task:
+            self.calib_task.cancelled = True
+            self.calib_task = None
+        self.calib_op = None
+        self.refresh_progress()
+
     def start_calibration(self, force=False):
         if not self.project.catalog:
             return
@@ -1111,10 +1241,15 @@ class MainWindow(QMainWindow):
             self.size_state = "failed"
             self.update_sizes()
             return
+        if self.building:
+            # One compile at a time: two at once can run a small computer out of memory.
+            self.calib_resume = True
+            self.size_state = "paused"
+            self.update_sizes()
+            return
         if self.calib_task and not force:
             return
-        if self.calib_task:
-            self.calib_task.cancelled = True
+        self.stop_calibration()
         project, engine = self.project, self.engine
         path = project.size_profile_path()
         catalog, firmware_dir, external = project.catalog, project.firmware_dir, project.external_items()
@@ -1125,7 +1260,8 @@ class MainWindow(QMainWindow):
             work_dir = data_dir() / "work" / f"calibrate-{uuid.uuid4().hex[:8]}"
             try:
                 prof = bld.calibrate(firmware_dir, catalog, external, engine, work_dir, log, cancelled,
-                                     output=lambda line: None, firmware_url=url, firmware_ref=ref)
+                                     output=lambda line: log(PROGRESS_ONLY + line), firmware_url=url,
+                                     firmware_ref=ref)
             finally:
                 shutil.rmtree(work_dir, ignore_errors=True)
             prof.fingerprint = path.stem
@@ -1135,7 +1271,7 @@ class MainWindow(QMainWindow):
         def done(prof):
             if self.calib_task is not task:
                 return
-            self.calib_task = None
+            self.stop_calibration()
             if prof.fingerprint == self.project.size_fingerprint():
                 self.size_profile, self.size_state = prof, "ready"
             self.update_sizes()
@@ -1146,15 +1282,17 @@ class MainWindow(QMainWindow):
         def failed(msg):
             if self.calib_task is not task:
                 return
-            self.calib_task = None
+            self.stop_calibration()
             self.size_state = "failed"
             self.update_sizes()
-            self.log.appendPlainText("Size measurement failed:\n" + msg)
+            self.append_log("Size measurement failed:\n" + msg)
 
-        task = Task(work, done, failed, lambda m: self.log.appendPlainText(m))
+        task = Task(work, done, failed, self.append_log, self.set_calib_progress)
         self.calib_task = task
+        self.calib_op = Progress("Measuring app sizes in the background")
         self.size_state = "measuring"
         self.update_sizes()
+        self.refresh_progress()
         self.pool.start(task)
 
     def update_sizes(self):
@@ -1163,7 +1301,7 @@ class MainWindow(QMainWindow):
         prof = self.size_profile
         limit = prof.flash_limit if prof else sizes.DEFAULT_FLASH_LIMIT
         self.estimate_over = False
-        if prof and self.size_state in ("ready", "measuring"):
+        if prof and self.size_state in ("ready", "measuring", "paused"):
             used, unknown = prof.estimate(enabled)
             self.meter.set(used, limit)
             free = limit - used
@@ -1179,6 +1317,8 @@ class MainWindow(QMainWindow):
                                         f"the {fmt_kb(limit)} limit — switch something off</span>")
             if self.size_state == "measuring":
                 self.meter_text.setText(self.meter_text.text() + "  ·  re-measuring…")
+            elif self.size_state == "paused":
+                self.meter_text.setText(self.meter_text.text() + "  ·  re-measuring after the build")
             self.update_resource_text(prof, enabled)
             subs = {}
             for page in (self.apps, self.faces):
@@ -1190,10 +1330,12 @@ class MainWindow(QMainWindow):
                     subs[k] = f"{e.origin}  ·  {size}{pack}"
                 page.set_subtitles(subs)
         else:
-            self.meter.set(None, limit, busy=self.size_state == "measuring")
+            self.meter.set(None, limit)
             self.res_text.setText("")
             self.meter_text.setText({
-                "measuring": "Flash: measuring how much space each app needs (first time only, about a minute)…",
+                "measuring": "Flash: measuring how much space each app needs (first time only; a few minutes on "
+                             "slower computers). You can keep choosing apps meanwhile.",
+                "paused": "Flash: size measurement paused while building — the build checks the size exactly",
                 "failed": "Flash: size estimate unavailable — the build will still check that it fits",
                 "none": "Flash: —",
             }[self.size_state])
@@ -1368,12 +1510,6 @@ class MainWindow(QMainWindow):
     # ---- build
     def start_build(self):
         self.save()
-        if not self.engine:
-            try:
-                self.engine = bld.find_engine(self.settings.engine)
-            except bld.BuildError as e:
-                self.show_error(str(e))
-                return
         req, errors, warnings = self.project.build_request()
         if errors:
             self.show_error("\n".join(errors))
@@ -1381,12 +1517,38 @@ class MainWindow(QMainWindow):
         if warnings and QMessageBox.question(self, "InfiniTime Builder", "\n".join(warnings) + "\n\nBuild anyway?") \
                 != QMessageBox.StandardButton.Yes:
             return
-        self.log.clear()
+        if self.calib_task:
+            # The build checks the size exactly; measuring at the same time would only make both
+            # slower and could run a small computer out of memory. It resumes after the build.
+            self.stop_calibration()
+            self.calib_resume = True
+            self.size_state = "paused"
+            self.update_sizes()
+        self.clear_log()
         self.open_btn.hide()
-        engine, out = self.engine, Path(self.settings.output_dir).expanduser()
-        self.run(lambda log, cancelled: bld.build(req, engine, data_dir() / "work", out,
-                                                  lambda m: log("\x01" + m), cancelled, output=log),
-                 self.build_done, self.build_failed, "Starting build…", cancellable=True)
+        engine, pref, out = self.engine, self.settings.engine, Path(self.settings.output_dir).expanduser()
+        found: list[bld.Engine] = []
+
+        def work(log, cancelled):
+            eng = engine
+            if eng is None:  # not found at startup; `docker info` can take a while, so not on the GUI thread
+                log(STATUS + "Looking for Docker or Podman…")
+                eng = bld.find_engine(pref)
+                found.append(eng)
+            return bld.build(req, eng, data_dir() / "work", out, lambda m: log(STATUS + m), cancelled, output=log)
+
+        def after():
+            self.building = False
+            if found:
+                self.engine, self.engine_error = found[0], ""
+                self.show_engine()
+            if self.calib_resume:
+                self.calib_resume = False
+                self.start_calibration(force=True)
+
+        self.building = True
+        self.run(work, lambda r: (after(), self.build_done(r)), lambda m: (after(), self.build_failed(m)),
+                 "Starting build…", cancellable=True)
 
     def cancel(self):
         if self.task:
