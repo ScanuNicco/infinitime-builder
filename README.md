@@ -20,6 +20,8 @@ without forking or touching code:
 Building uses the official `infinitime/infinitime-build` Docker image, so nothing else needs to be
 installed. The builder picks the image tag that matches the InfiniTime version you build (see below).
 
+**WARNING:** When installing multiple third-party apps, there is no guarantee that your specific combination has been tested by anyone, nor that a given app has been tested at all. InfiniTime provides multiple built-in recovery features, but if you have a sealed watch there is still some risk. **I am not responsible for bricked watches.**
+
 ## Requirements
 
 - Linux: Debian 13+, Ubuntu 24.04+ or Fedora with the packages, or any system with Python 3.10+
@@ -55,22 +57,17 @@ you build. Firmware builds run without network access.
 1. **Apps**: flip the switch to put an app on the watch or take it off. Drag the items under
    *On your watch* to set the launcher order (6 apps per page; the watch preview on the right
    shows the pages, click it to flip).
-2. **Watch faces**: the same, for watch faces. Click a face to see a screenshot of it on the
+2. **Watch faces**: use the switch to enable/disable just like apps. Click a face to see a screenshot of it on the
    watch preview; click the watch to step through the faces you've switched on. (Built-in faces use
    screenshots bundled with the builder; third-party faces use the `screenshot` from their
    manifest.) You pick the active face on the watch under Settings > Watch face.
-3. **Sources**: add a GitHub repo (`owner/repo`, a URL, optionally a branch or tag), a local
-   folder, or search GitHub for repos tagged `infinitime-app`. Their items appear switched off in
-   the first two pages. A fresh install already has two demo sources added:
-   [ScanuNicco/infinitime-sky-games](https://github.com/ScanuNicco/infinitime-sky-games) (two small
-   games) and [ScanuNicco/infinitime-concept-faces](https://github.com/ScanuNicco/infinitime-concept-faces)
-   (two watch faces using the resource pack). You can remove them like any other source. For private repositories (or to avoid GitHub's anonymous rate limit),
-   start the builder with a `GITHUB_TOKEN` environment variable, e.g.
-   `GITHUB_TOKEN=$(gh auth token) infinitime-builder`. The token is only sent to `api.github.com`, never to other
-   hosts, even when GitHub redirects a download elsewhere.
-4. Watch the **flash meter** at the bottom, then press **Build firmware**. The first build downloads
+3. **Sources**: add an external GitHub repo (`owner/repo`, a URL, optionally a branch or tag), a local
+   folder, or search GitHub for repos tagged `infinitime-app`. Any watchfaces and apps they contain will appear under the appropriate tab for you to enable. The app comes with two small demo repos containing [two games](https://github.com/ScanuNicco/infinitime-sky-games) and [ten watchfaces](https://github.com/ScanuNicco/infinitime-concept-faces).
+
+   **NOTE:** The bundled watchfaces and games are considered proof of concept apps primarily intended to demo InfiniTime Builder. They have all been tested on real hardware, but I don't consider them production quality at this point.
+5. Watch the **flash meter** at the bottom, then press **Build firmware**. The first build downloads
    InfiniTime and the build image; later builds take about a minute.
-5. Send the DFU zip to your watch, then press *Validate* under Settings > Firmware on the watch.
+6. Send the DFU zip to your watch, then press *Validate* under Settings > Firmware on the watch.
 
 The firmware button at the top right chooses the InfiniTime version (default: the latest release) or a fork.
 **File > Export profile** saves your selection and sources as JSON to share, or to use with
@@ -79,10 +76,10 @@ or to InfiniTime's own default selection.
 
 ## Will it fit?
 
-The PineTime has 474,632 bytes (about 464 KB) of flash for the firmware and 64 KB of RAM.
+The PineTime has about 64 KB of RAM, 464 KB of internal flash for the firmware, and 3.3MB of external flash for fonts and images.
 
 - **Before building:** after loading a firmware version, and whenever sources change, the builder
-  does a one-off *calibration build* (about 20 to 60 s, in the background). It compiles everything
+  does a one-off *calibration build* in the background. It compiles everything
   with the flash limit lifted and reads the linker map: how much flash each object file takes, and
   which files depend on which. For any selection it then replays the linker's garbage collection on
   that graph. Against real builds this was within 0.4 to 0.7% and always slightly high (e.g.
@@ -93,16 +90,11 @@ The PineTime has 474,632 bytes (about 464 KB) of flash for the firmware and 64 K
 - **CLI:** `infinitime-builder-cli sizes` lists every item's cost. `build` refuses a selection
   that is clearly too big unless `--force` is given.
 
-**The resource pack** (fonts and images on the watch's external flash) has its own limit: the
-watch's file system holds about 3.3 MB (844 blocks of 4 KB, read from the firmware's
-`components/fs/FS.h`), of which 128 KB is kept free for the watch's own files. Every file takes
-whole 4 KB blocks, so the builder counts blocks rather than bytes; this model matches littlefs exactly
+**The resource pack** Every file takes whole 4 KB blocks, so the builder counts blocks rather than bytes; this model matches littlefs exactly
 on real resource packs. The size is shown under the flash meter (and per item, "… in resource pack"),
-in red when it won't fit, and checked again on the real zip after every build. An oversized pack is a
-warning rather than an error: the firmware itself is fine, but the pack won't install completely.
-Note that installing a pack doesn't remove files from earlier packs that are no longer in it.
+in red when it won't fit, and checked again on the real zip after every build. In real-world use the speed of the exernal flash is more of a limiter than the size. It took ~15min to upload a ~300KB resource pack to my watch. Watchfaces that load a lot of resources from external storage open very slowly.
 
-Not checked: memory an app allocates while it runs (the LVGL and FreeRTOS heaps). That depends
+**RAM** is not something that the app can currently check. It depends
 on what the app does on screen, not on what's compiled in.
 
 ## How it works
@@ -136,6 +128,14 @@ Settings and caches are stored in `~/.local/share/infinitime-builder` (Linux),
   `minInfiniTime` triggers a warning, and compile errors in third-party code are shown as such.
 - The watch stores the selected watch face as a number. Adding or removing third-party faces between
   builds can switch your face to a different one; just pick it again.
+- Large resource packs can take a long time to upload, and some companion apps fail before finishing the upload. I found that ITD was the most reliable for uploading resource packs.
+
+## Possible Future Enhancements
+- Bundle ITD as a git submodule to support direct flashing from systems with bluetooth support.
+- Bundle InfiniEmu to allow users to test a generated firmware before flashing to their watch.
+
+## AI Use
+AI was used under strong human oversight to accelerate development of this app. I believe that AI should not be used for a task the developer doesn't know how to do manually. I have written InfiniTime apps and mods by hand in the past and feel I have sufficient knowledge of it to have made this without the use of AI. The demo apps and watchfaces were written with less oversight, which is why I consider them not to be production quality at this point.
 
 ## Testing a build in an emulator
 
