@@ -23,7 +23,11 @@ MINIMAL_APPS = ["builtin:Apps::Timer", "builtin:Apps::StopWatch", "builtin:Apps:
 MINIMAL_WATCHFACES = ["builtin:WatchFace::Digital", "builtin:WatchFace::Analog"]
 
 # Package sources a fresh install starts with (their apps start switched off).
-DEFAULT_SOURCES = [("github", "ScanuNicco/infinitime-sky-games"), ("github", "ScanuNicco/infinitime-concept-faces")]
+DEFAULT_SOURCES = [
+    ("github", "ScanuNicco/infinitime-sky-games"),
+    ("github", "ScanuNicco/infinitime-concept-faces"),
+    ("github", "ScanuNicco/infinitime-pebble-ports"),
+]
 
 
 def default_sources() -> list[SourceSpec]:

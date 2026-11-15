@@ -234,3 +234,4 @@ Rules:
 - [`examples/bigclock-face`](../examples/bigclock-face): a minimal watch face.
 - [ScanuNicco/infinitime-sky-games](https://github.com/ScanuNicco/infinitime-sky-games): two apps in one repository.
 - [ScanuNicco/infinitime-concept-faces](https://github.com/ScanuNicco/infinitime-concept-faces): watch faces with fonts and images in the resource pack.
+- [ScanuNicco/infinitime-pebble-ports](https://github.com/ScanuNicco/infinitime-pebble-ports): Pebble watch faces ported to InfiniTime, with on-watch settings menus, artwork generated into the firmware, and a generator script for the manifest.

@@ -195,21 +195,25 @@ def test_default_sources_reach_existing_installs(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True)
     games = SourceSpec("github", "ScanuNicco/infinitime-sky-games")
     faces = SourceSpec("github", "ScanuNicco/infinitime-concept-faces")
+    pebble = SourceSpec("github", "ScanuNicco/infinitime-pebble-ports")
 
     # saved before default sources existed -> the defaults are added once
     path.write_text(json.dumps({"sources": [], "apps": ["builtin:Apps::Timer"]}))
     s = project.load_settings()
-    assert s.sources == [games, faces] and s.apps == ["builtin:Apps::Timer"]
-    assert json.loads(path.read_text())["seen_defaults"] == [games.id, faces.id]
+    assert s.sources == [games, faces, pebble] and s.apps == ["builtin:Apps::Timer"]
+    assert json.loads(path.read_text())["seen_defaults"] == [games.id, faces.id, pebble.id]
 
     # the user removes one -> it stays removed
     s.sources.remove(games)
     project.save_settings(s)
-    assert project.load_settings().sources == [faces]
+    assert project.load_settings().sources == [faces, pebble]
 
-    # an install that has seen only the first default gets the newer one added
+    # an install that has seen only the older defaults gets the newer ones added
     path.write_text(json.dumps({"sources": [], "seen_defaults": [games.id]}))
-    assert project.load_settings().sources == [faces]
+    assert project.load_settings().sources == [faces, pebble]
+    # an install from before Pebble Ports was a default keeps its sources and gains it at the end
+    path.write_text(json.dumps({"sources": [games.to_json(), faces.to_json()], "seen_defaults": [games.id, faces.id]}))
+    assert project.load_settings().sources == [games, faces, pebble]
 
     # profiles shared with others don't carry it
     assert "seen_defaults" not in s.to_json(include_local=False)

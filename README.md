@@ -62,9 +62,9 @@ you build. Firmware builds run without network access.
    screenshots bundled with the builder; third-party faces use the `screenshot` from their
    manifest.) You pick the active face on the watch under Settings > Watch face.
 3. **Sources**: add an external GitHub repo (`owner/repo`, a URL, optionally a branch or tag), a local
-   folder, or search GitHub for repos tagged `infinitime-app`. Any watchfaces and apps they contain will appear under the appropriate tab for you to enable. The app comes with two small demo repos containing [two games](https://github.com/ScanuNicco/infinitime-sky-games) and [ten watchfaces](https://github.com/ScanuNicco/infinitime-concept-faces).
+   folder, or search GitHub for repos tagged `infinitime-app`. Any watchfaces and apps they contain will appear under the appropriate tab for you to enable. The app comes with three repos: two small demos containing [two games](https://github.com/ScanuNicco/infinitime-sky-games) and [ten watchfaces](https://github.com/ScanuNicco/infinitime-concept-faces), and [Pebble Ports](https://github.com/ScanuNicco/infinitime-pebble-ports), five watch faces from the Pebble (Inset, RetroFuture, BRUTAL, Pulsar and AntiGrav) ported by permission of their open-source licenses, with credit to their original authors.
 
-   **NOTE:** The bundled watchfaces and games are considered proof of concept apps primarily intended to demo InfiniTime Builder. They have all been tested on real hardware, but I don't consider them production quality at this point.
+   **NOTE:** The bundled demo watchfaces and games are considered proof of concept apps primarily intended to demo InfiniTime Builder. They have all been tested on real hardware, but I don't consider them production quality at this point.
 5. Watch the **flash meter** at the bottom, then press **Build firmware**. The first build downloads
    InfiniTime and the build image; later builds take about a minute.
 6. Send the DFU zip to your watch, then press *Validate* under Settings > Firmware on the watch.
