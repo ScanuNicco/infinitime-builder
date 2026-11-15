@@ -5,6 +5,9 @@ All notable changes to InfiniTime Builder. The newest release comes first; its v
 and the AppStream release list, so keep to the format: `## [version] - YYYY-MM-DD` headings
 followed by `- ` bullet points (`###` subheadings are allowed and ignored).
 
+## [0.1.1] - 2026-11-14
+- Add ScanuNicco/infinitime-pebble-ports as a default app source
+
 ## [0.1.0] - 2026-11-14
 
 - First release: choose, order and add third-party apps and watch faces, and build InfiniTime
