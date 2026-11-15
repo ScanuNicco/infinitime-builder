@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .qt import (  # noqa: F401  (PySide6 or PyQt6)
-    QAbstractItemView, QAction, QApplication, QColor, QComboBox, QDesktopServices, QDialog, QDialogButtonBox, QFileDialog, QFont, QFontDatabase, QFormLayout, QFrame, QHBoxLayout, QIcon, QKeySequence, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QObject, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPlainTextEdit, QPointF, QProgressBar, QPushButton, QRectF, QRunnable, QScrollArea, QSize, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyleOptionViewItem, QStyledItemDelegate, QThreadPool, QTimer, QToolButton, QUrl, QVBoxLayout, QWidget, Qt, Signal, Slot,
+    QAbstractItemView, QAction, QApplication, QColor, QComboBox, QDesktopServices, QDialog, QDialogButtonBox, QFileDialog, QFont, QFontDatabase, QFormLayout, QFrame, QHBoxLayout, QIcon, QKeySequence, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QObject, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPlainTextEdit, QPointF, QPushButton, QRectF, QRunnable, QScrollArea, QSize, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyleOptionViewItem, QStyledItemDelegate, QThreadPool, QTimer, QUrl, QVBoxLayout, QWidget, Qt, Signal, Slot,
 )
 
 from . import __version__
@@ -457,16 +457,31 @@ class FacePreview(WatchPreview):
 
 
 class FlashMeter(QWidget):
+    """The flash usage bar. While an operation runs it becomes that operation's progress bar."""
+
     def __init__(self):
         super().__init__()
         self.used: int | None = None
         self.limit = sizes.DEFAULT_FLASH_LIMIT
+        self.progress_active = False
+        self.progress_pct: int | None = None  # None while active: no percentage known, so animate
+        self.anim = QTimer(self, interval=40)
+        self.anim.timeout.connect(self.update)
         self.setMinimumHeight(14)
         self.setMaximumHeight(14)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set(self, used: int | None, limit: int):
         self.used, self.limit = used, limit
+        self.update()
+
+    def set_progress(self, active: bool, pct: int | None = None):
+        self.progress_active, self.progress_pct = active, pct if active else None
+        animate = active and pct is None
+        if animate and not self.anim.isActive():
+            self.anim.start()
+        elif not animate:
+            self.anim.stop()
         self.update()
 
     def colour(self) -> QColor:
@@ -484,6 +499,20 @@ class FlashMeter(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(mix(base, text, 0.12))
         p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        rad = r.height() / 2
+        if self.progress_active:
+            p.setBrush(ACCENT)
+            if self.progress_pct is not None:
+                w = r.width() * self.progress_pct / 100
+                if w > 0:
+                    p.drawRoundedRect(QRectF(r.left(), r.top(), max(w, r.height()), r.height()), rad, rad)
+            else:  # a block sliding across, timed by the clock so a slow machine just skips frames
+                chunk = r.width() * 0.25
+                t = (time.monotonic() % 1.6) / 1.6
+                x = r.left() - chunk + (r.width() + chunk) * t
+                p.setClipRect(r)
+                p.drawRoundedRect(QRectF(x, r.top(), chunk, r.height()), rad, rad)
+            return
         if self.used is not None:
             scale = max(self.limit, self.used) * 1.0
             w = r.width() * self.used / scale
@@ -493,7 +522,6 @@ class FlashMeter(QWidget):
                 lx = r.left() + r.width() * self.limit / scale
                 p.setBrush(text)
                 p.drawRect(QRectF(lx - 1, r.top() - 2, 2, r.height() + 4))
-        # While measuring, the track stays empty: the progress bar below shows the measurement.
 
 
 # --------------------------------------------------------------------------- picker page
@@ -721,14 +749,21 @@ QMainWindow, #page { background: palette(window); }
 #navButton:checked { background: %(chip)s; color: palette(window-text); }
 #navButton:hover:!checked { color: palette(window-text); }
 #buildButton { background: %(accent)s; color: white; border: none; border-radius: 10px;
-               padding: 10px 26px; font-size: 15px; font-weight: 700; }
+               padding: 10px 26px; font-size: 15px; font-weight: 700; min-height: 20px; }
 #buildButton:hover { background: %(accent_hover)s; }
 #buildButton:disabled { background: %(chip)s; color: %(muted)s; }
 #bottomBar { background: %(bar)s; border-top: 1px solid %(line)s; }
+#secondaryButton, #logButton, #stopButton { border-radius: 10px; padding: 10px 18px; font-size: 14px;
+               font-weight: 600; min-height: 20px; }
+#secondaryButton, #logButton { background: %(chip)s; border: 1px solid transparent; }
+#secondaryButton:hover, #logButton:hover { border-color: %(line)s; background: %(line)s; }
+#logButton:checked { background: %(accent_tint)s; color: %(accent_text)s; border-color: %(accent)s; }
+#stopButton { background: transparent; color: %(bad)s; border: 1px solid %(bad)s; }
+#stopButton:hover { background: %(bad_tint)s; }
+#stopButton:pressed, #secondaryButton:pressed, #logButton:pressed { padding-top: 11px; padding-bottom: 9px; }
 #meterText { font-weight: 600; }
+#progressText { font-weight: 600; color: %(muted)s; }
 #statusText { color: %(muted)s; }
-QProgressBar { border: none; border-radius: 5px; background: %(line)s; }
-QProgressBar::chunk { border-radius: 5px; background: %(accent)s; }
 QLineEdit { padding: 6px 10px; border-radius: 8px; border: 1px solid %(line)s; background: palette(base); }
 #card { background: %(card)s; border-radius: 12px; }
 """
@@ -848,6 +883,9 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         top.addWidget(self.meter_text)
         top.addStretch()
+        self.progress_text = QLabel("")  # percentage and elapsed time while an operation runs
+        self.progress_text.setObjectName("progressText")
+        top.addWidget(self.progress_text)
         info.addLayout(top)
         info.addWidget(self.meter)
         self.res_text = QLabel("")
@@ -856,38 +894,33 @@ class MainWindow(QMainWindow):
                                  "infinitime-resources zip to the watch after the firmware.")
         info.addWidget(self.res_text)
         info.addWidget(self.status)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(10)
-        self.progress_text = QLabel("")
-        self.progress_text.setObjectName("statusText")
-        prow = QHBoxLayout()
-        prow.addWidget(self.progress, 1)
-        prow.addWidget(self.progress_text)
-        info.addLayout(prow)
-        self.progress.hide()
-        self.progress_text.hide()
         self.build_btn = QPushButton("Build firmware")
         self.build_btn.setObjectName("buildButton")
         self.build_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.build_btn.clicked.connect(self.start_build)
-        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn = QPushButton("Stop")
+        self.cancel_btn.setObjectName("stopButton")
+        self.cancel_btn.setToolTip("Stop the build")
         self.cancel_btn.clicked.connect(self.cancel)
         self.cancel_btn.hide()
         self.open_btn = QPushButton("Open folder")
+        self.open_btn.setObjectName("secondaryButton")
         self.open_btn.clicked.connect(self.open_output)
         self.open_btn.hide()
-        self.log_btn = QToolButton()
-        self.log_btn.setText("Log")
+        self.log_btn = QPushButton("Log")
+        self.log_btn.setObjectName("logButton")
         self.log_btn.setCheckable(True)
         self.log_btn.setToolTip("Show the full build output")
         self.log_btn.toggled.connect(self.log.setVisible)
+        for b in (self.cancel_btn, self.open_btn, self.log_btn):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
         bar = QWidget()
         bar.setObjectName("bottomBar")
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(18, 12, 18, 12)
         bl.addLayout(info, 1)
         bl.addSpacing(16)
+        bl.setSpacing(8)
         bl.addWidget(self.log_btn)
         bl.addWidget(self.open_btn)
         bl.addWidget(self.cancel_btn)
@@ -925,6 +958,10 @@ class MainWindow(QMainWindow):
             "muted": mix(win, txt, 0.55).name(),
             "accent": ACCENT.name(),
             "accent_hover": ACCENT.lighter(115).name(),
+            "accent_tint": mix(win, ACCENT, 0.16).name(),
+            "accent_text": (ACCENT.lighter(150) if dark else ACCENT).name(),
+            "bad": (BAD.lighter(130) if dark else BAD).name(),
+            "bad_tint": mix(win, BAD, 0.12).name(),
             "bar": mix(win, txt, 0.04 if not dark else 0.06).name(),
             "line": mix(win, txt, 0.15).name(),
             "card": mix(win, txt, 0.04).name(),
@@ -1045,7 +1082,7 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(ok)
         self.build_btn.setText("Building…" if self.busy and self.cancel_btn.isVisible() else "Build firmware")
 
-    def run(self, fn, done, failed=None, msg="", cancellable=False):
+    def run(self, fn, done, failed=None, msg="", cancellable=False, title=""):
         def finish():
             self.op = None
             self.flush_log()
@@ -1054,7 +1091,7 @@ class MainWindow(QMainWindow):
 
         self.task = Task(fn, lambda r: (finish(), done(r)), lambda m: (finish(), (failed or self.show_error)(m)),
                          self.append_log, self.set_op_progress)
-        self.op = Progress()
+        self.op = Progress(title or msg.rstrip("…."))
         self.set_busy(True, msg, cancellable)
         self.refresh_progress()
         self.pool.start(self.task)
@@ -1070,21 +1107,21 @@ class MainWindow(QMainWindow):
             self.refresh_progress()
 
     def refresh_progress(self):
-        """Show the foreground operation, else the size measurement, else nothing."""
+        """While an operation runs (the foreground one first, else the size measurement), the flash
+        meter shows its progress; afterwards it goes back to showing flash usage."""
         op = self.op or self.calib_op
-        self.progress.setVisible(op is not None)
-        self.progress_text.setVisible(op is not None)
         if op is None:
             self.progress_timer.stop()
+            self.progress_text.setText("")
+            if self.meter.progress_active:
+                self.meter.set_progress(False)
+                self.update_sizes()
             return
         if not self.progress_timer.isActive():
             self.progress_timer.start()
-        if op.pct is None:
-            self.progress.setRange(0, 0)  # animated "working" bar
-        else:
-            self.progress.setRange(0, 100)
-            self.progress.setValue(op.pct)
-        parts = [op.label, f"{op.pct}%" if op.pct is not None else "", fmt_elapsed(time.monotonic() - op.start)]
+        self.meter.set_progress(True, op.pct)
+        self.meter_text.setText(op.label)
+        parts = [f"{op.pct}%" if op.pct is not None else "", fmt_elapsed(time.monotonic() - op.start)]
         self.progress_text.setText("  ·  ".join(p for p in parts if p))
 
     def append_log(self, line: str):
@@ -1171,7 +1208,7 @@ class MainWindow(QMainWindow):
             self.fw_chip.setText("Firmware: could not load  ▾")
             self.show_error("Could not get the InfiniTime source:\n" + msg)
 
-        self.run(work, done, failed, "Downloading InfiniTime source (first run only)…")
+        self.run(work, done, failed, "Downloading InfiniTime source (first run only)…", title="Loading InfiniTime")
 
     def show_engine(self):
         if self.engine:
@@ -1289,7 +1326,7 @@ class MainWindow(QMainWindow):
 
         task = Task(work, done, failed, self.append_log, self.set_calib_progress)
         self.calib_task = task
-        self.calib_op = Progress("Measuring app sizes in the background")
+        self.calib_op = Progress("Measuring app sizes in the background — you can keep choosing apps")
         self.size_state = "measuring"
         self.update_sizes()
         self.refresh_progress()
@@ -1346,6 +1383,8 @@ class MainWindow(QMainWindow):
             page.on_list.viewport().update()
             page.off_list.viewport().update()
         self.update_build_button()
+        if self.op or self.calib_op:
+            self.refresh_progress()  # the meter is showing an operation's progress
 
     def update_resource_text(self, prof: sizes.SizeProfile, enabled: set[str]):
         if not prof.resource_sizes:
@@ -1448,7 +1487,7 @@ class MainWindow(QMainWindow):
             self.status.setText("Sources updated.")
             self.load_size_profile()
 
-        self.run(work, done, msg="Updating sources…")
+        self.run(work, done, msg="Updating sources…", title="Updating sources")
 
     # ---- firmware / profile
     def change_firmware(self):
@@ -1548,22 +1587,25 @@ class MainWindow(QMainWindow):
 
         self.building = True
         self.run(work, lambda r: (after(), self.build_done(r)), lambda m: (after(), self.build_failed(m)),
-                 "Starting build…", cancellable=True)
+                 "Starting build…", cancellable=True, title="Building firmware")
 
     def cancel(self):
         if self.task:
             self.task.cancelled = True
-            self.status.setText("Cancelling…")
+            self.status.setText("Stopping…")
 
     def build_done(self, res: bld.BuildResult):
         self.last_result = res
         usage = ""
+        used = ""
         if res.flash_used and res.flash_size:
             self.meter.set(res.flash_used, res.flash_size)
-            self.meter_text.setText(f"Flash: {fmt_kb(res.flash_used)} of {fmt_kb(res.flash_size)}  ·  "
-                                    f"{fmt_kb(res.flash_size - res.flash_used)} free  (exact, from this build)")
+            if not self.calib_op:  # else the meter is showing the resumed size measurement
+                self.meter_text.setText(f"Flash: {fmt_kb(res.flash_used)} of {fmt_kb(res.flash_size)}  ·  "
+                                        f"{fmt_kb(res.flash_size - res.flash_used)} free  (exact, from this build)")
             usage = f"It uses {fmt_kb(res.flash_used)} of the watch's {fmt_kb(res.flash_size)} of flash."
-        self.status.setText(f"<b style='color:{ACCENT.name()}'>Done in {res.seconds:.0f}s</b>  ·  {res.dfu.name}")
+            used = f"  ·  {fmt_kb(res.flash_used)} of {fmt_kb(res.flash_size)} flash"
+        self.status.setText(f"<b style='color:{ACCENT.name()}'>Done in {res.seconds:.0f}s</b>{used}  ·  {res.dfu.name}")
         self.open_btn.show()
         res_warning = "" if res.resources is None or res.resources_fit else (
             "<p style='color:%s'><b>Warning:</b> %s</p>" % (BAD.name(), bld.resource_warning(

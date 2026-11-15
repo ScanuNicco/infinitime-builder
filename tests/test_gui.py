@@ -134,9 +134,12 @@ def test_tasks_do_not_queue_behind_each_other_on_a_single_core(window, app):
     assert got["done"] == 7
 
 
-def test_progress_bar_follows_the_operation(window, app):
+def test_flash_meter_becomes_the_progress_bar(window, app):
     import threading
 
+    window.size_state = "failed"  # no estimate: the meter shows a fixed message
+    window.update_sizes()
+    flash_text = window.meter_text.text()
     release = threading.Event()
 
     def work(log, cancelled):
@@ -144,30 +147,34 @@ def test_progress_bar_follows_the_operation(window, app):
         log("[ 37%] Building CXX object x.o")
         release.wait(10)
 
-    window.run(work, lambda r: None)
+    window.run(work, lambda r: None, title="Building firmware")
     try:
-        assert window.progress.isVisibleTo(window)
-        assert _wait(app, lambda: window.progress.value() == 37)
-        assert window.progress.maximum() == 100
+        assert _wait(app, lambda: window.meter.progress_pct == 37)
+        assert window.meter.progress_active
+        assert window.meter_text.text() == "Building firmware"
         assert "37%" in window.progress_text.text()
         assert window.status.text() == "Compiling firmware..."
+        window.on_changed()  # e.g. toggling an app must not replace the progress display
+        assert window.meter_text.text() == "Building firmware"
     finally:
         release.set()
-    assert _wait(app, lambda: not window.progress.isVisibleTo(window))
+    assert _wait(app, lambda: not window.meter.progress_active)
+    assert window.meter_text.text() == flash_text and window.progress_text.text() == ""
     assert "[ 37%] Building CXX object x.o" in window.log.toPlainText()
 
 
-def test_progress_is_indeterminate_until_a_percentage_is_known(window, app):
+def test_progress_animates_until_a_percentage_is_known(window, app):
     import threading
 
     release = threading.Event()
     window.run(lambda log, c: release.wait(10), lambda r: None)
     try:
-        assert window.progress.isVisibleTo(window)
-        assert window.progress.maximum() == 0  # Qt's animated "busy" bar
+        assert window.meter.progress_active and window.meter.progress_pct is None
+        assert window.meter.anim.isActive()
     finally:
         release.set()
     assert _wait(app, lambda: not window.busy)
+    assert not window.meter.anim.isActive()
 
 
 def test_build_pauses_the_size_measurement_and_resumes_it(window, app, monkeypatch):
