@@ -456,6 +456,14 @@ class FacePreview(WatchPreview):
 # --------------------------------------------------------------------------- flash meter
 
 
+class StatusLabel(QLabel):
+    """A label that takes no room while it has nothing to say."""
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class FlashMeter(QWidget):
     """The flash usage bar. While an operation runs it becomes that operation's progress bar."""
 
@@ -874,7 +882,7 @@ class MainWindow(QMainWindow):
         self.meter = FlashMeter()
         self.meter_text = QLabel("Flash: measuring…")
         self.meter_text.setObjectName("meterText")
-        self.status = QLabel("")
+        self.status = StatusLabel("")
         self.status.setObjectName("statusText")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1200,8 +1208,8 @@ class MainWindow(QMainWindow):
             self.fw_chip.setToolTip(f"{self.settings.firmware_url} @ {ref or 'default branch'}\nClick to change")
             self.show_engine()
             self.populate()
-            self.set_busy(False, "Ready. Switch apps on or off, drag to reorder, then build."
-                          if self.engine else "Docker is needed to build: " + self.engine_error)
+            self.set_busy(False)
+            self.status.setText("" if self.engine else "Docker is needed to build: " + self.engine_error)
             self.load_size_profile()
 
         def failed(msg):
