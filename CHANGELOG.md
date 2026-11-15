@@ -6,7 +6,9 @@ and the AppStream release list, so keep to the format: `## [version] - YYYY-MM-D
 followed by `- ` bullet points (`###` subheadings are allowed and ignored).
 
 ## [0.1.1] - 2026-11-14
-- Add ScanuNicco/infinitime-pebble-ports as a default app source
+
+- Add ScanuNicco/infinitime-pebble-ports as a default app source (Pebble watch faces ported to
+  InfiniTime); existing installs get it added once.
 
 ## [0.1.0] - 2026-11-14
 
@@ -19,5 +21,3 @@ followed by `- ` bullet points (`###` subheadings are allowed and ignored).
 - Progress bar with percentage and elapsed time for downloads, size measurement and builds; the
   window stays responsive on slow and single-core computers.
 - .deb and .rpm packages for Debian 13+, Ubuntu 24.04+ and Fedora.
-- Pebble Ports (ScanuNicco/infinitime-pebble-ports) is a default source alongside the demo games and
-  watch faces; existing installs get it added once.
