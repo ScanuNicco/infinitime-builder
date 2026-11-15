@@ -325,3 +325,18 @@ def test_make_progress_lines():
     assert bld.make_progress("[  0%] Generating fonts") == 0
     assert bld.make_progress("Scanning dependencies of target lvgl") is None
     assert bld.make_progress("warning: [ 42%] in the middle") is None
+
+
+def test_changelog_releases_on_the_same_day():
+    sys.path.insert(0, str(ROOT / "packaging"))
+    try:
+        import changelog
+    finally:
+        sys.path.pop(0)
+    text = "## [0.2.0] - 2026-11-14\n\n- Second.\n\n## [0.1.0] - 2026-11-14\n\n- First.\n"
+    deb = changelog.debian(changelog.parse(text), "x", "M <m@example.org>", "1")
+    stamps = [line.split("  ", 1)[1] for line in deb.splitlines() if line.startswith(" -- ")]
+    # Debian (lintian latest-changelog-entry-without-new-date) needs the newer entry strictly later
+    assert stamps == ["Sat, 14 Nov 2026 13:00:00 +0000", "Sat, 14 Nov 2026 12:00:00 +0000"]
+    with pytest.raises(ValueError, match="dated before"):
+        changelog.parse("## [0.2.0] - 2026-11-13\n\n- Second.\n\n## [0.1.0] - 2026-11-14\n\n- First.\n")

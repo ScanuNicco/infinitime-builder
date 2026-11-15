@@ -52,6 +52,9 @@ def parse(text: str) -> list[Release]:
     for r in releases:
         if not r.changes:
             raise ValueError(f"CHANGELOG.md: release {r.version} lists no changes")
+    for newer, older in zip(releases, releases[1:]):
+        if newer.date < older.date:
+            raise ValueError(f"CHANGELOG.md: release {newer.version} ({newer.date}) is dated before {older.version} ({older.date})")
     if not releases:
         raise ValueError("CHANGELOG.md: no releases found")
     return releases
@@ -68,11 +71,26 @@ def _wrap(text: str, width: int, first: str, rest: str) -> list[str]:
     return out
 
 
+def _debian_times(releases: list[Release]) -> list[dt.datetime]:
+    """A time for each release (newest first) on its date, strictly later than the release before
+    it: Debian requires every changelog entry to be newer than the one below, and CHANGELOG.md
+    allows several releases on one day. Noon UTC, an hour later for each further release that day."""
+    times: list[dt.datetime] = []
+    previous: dt.datetime | None = None
+    for r in reversed(releases):
+        when = dt.datetime.combine(r.date, dt.time(12, 0), tzinfo=dt.timezone.utc)
+        if previous is not None and when <= previous:
+            when = previous + dt.timedelta(hours=1)
+        times.append(when)
+        previous = when
+    return times[::-1]
+
+
 def debian(releases: list[Release], name: str, maintainer: str, iteration: str) -> str:
     blocks = []
-    for i, r in enumerate(releases):
+    for i, (r, when_dt) in enumerate(zip(releases, _debian_times(releases))):
         rev = iteration if i == 0 else "1"
-        when = format_datetime(dt.datetime.combine(r.date, dt.time(12, 0), tzinfo=dt.timezone.utc))
+        when = format_datetime(when_dt)
         lines = [f"{name} ({r.version}-{rev}) unstable; urgency=medium", ""]
         for c in r.changes:
             lines += _wrap(c, 79, "  * ", "    ")
